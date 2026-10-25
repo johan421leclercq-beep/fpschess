@@ -5,6 +5,7 @@ import net.fabricmc.api.ModInitializer;
 import com.github.bhlangonijr.chesslib.Square;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.player.UseBlockCallback;
+import net.fabricmc.fabric.api.event.player.UseEntityCallback;
 import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
@@ -13,6 +14,7 @@ import net.minecraft.text.Text;
 import net.minecraft.util.ActionResult;
 import net.minecraft.util.Hand;
 import net.minecraft.util.math.BlockPos;
+import java.util.Locale;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -44,6 +46,24 @@ public class FpsChessMod implements ModInitializer {
             }
             handler.onClick(sp, sq);
             return ActionResult.SUCCESS;
+        });
+
+        // Clic droit directement sur une pièce (zone cliquable invisible)
+        UseEntityCallback.EVENT.register((player, world, hand, entity, hitResult) -> {
+            if (world.isClient() || hand != Hand.MAIN_HAND || renderer == null || handler == null) {
+                return ActionResult.PASS;
+            }
+            if (!(player instanceof ServerPlayerEntity sp)) {
+                return ActionResult.PASS;
+            }
+            for (String tag : entity.getCommandTags()) {
+                if (tag.startsWith(BoardRenderer.SQ_TAG_PREFIX)) {
+                    String name = tag.substring(BoardRenderer.SQ_TAG_PREFIX.length());
+                    handler.onClick(sp, Square.fromValue(name.toUpperCase(Locale.ROOT)));
+                    return ActionResult.SUCCESS;
+                }
+            }
+            return ActionResult.PASS;
         });
 
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) ->

@@ -3,6 +3,7 @@ package fr.fpschess;
 import com.github.bhlangonijr.chesslib.Board;
 import com.github.bhlangonijr.chesslib.File;
 import com.github.bhlangonijr.chesslib.Piece;
+import com.github.bhlangonijr.chesslib.PieceType;
 import com.github.bhlangonijr.chesslib.Rank;
 import com.github.bhlangonijr.chesslib.Side;
 import com.github.bhlangonijr.chesslib.Square;
@@ -11,6 +12,7 @@ import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.math.BlockPos;
 
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
@@ -27,8 +29,8 @@ public class BoardRenderer {
     public static final int CELL = 3;
     public static final String TAG = "fpschess_piece";
 
-    private static final String LIGHT = "minecraft:smooth_quartz";
-    private static final String DARK = "minecraft:polished_blackstone";
+    private static final String LIGHT = "minecraft:birch_planks";
+    private static final String DARK = "minecraft:dark_oak_planks";
 
     private final MinecraftServer server;
     private final ServerWorld world;
@@ -97,8 +99,69 @@ public class BoardRenderer {
 
     // ---------- Pièces ----------
 
+    public static final String SQ_TAG_PREFIX = "fpschess_sq_";
+
+    /** Un morceau de statue : taille, centre (cx, cz) par rapport au centre de la case, hauteur y depuis le sol. */
+    private record Part(double sx, double sy, double sz, double cx, double y, double cz, boolean gold) {}
+
+    private static Part p(double sx, double sy, double sz, double cx, double y, double cz) {
+        return new Part(sx, sy, sz, cx, y, cz, false);
+    }
+
+    private static Part g(double sx, double sy, double sz, double cx, double y, double cz) {
+        return new Part(sx, sy, sz, cx, y, cz, true);
+    }
+
+    /** Dessin de chaque pièce. cz négatif = vers l'avant (le museau du cavalier). */
+    private static List<Part> parts(PieceType type) {
+        return switch (type) {
+            case PAWN -> List.of(
+                p(1.4, 0.25, 1.4, 0, 0, 0),
+                p(0.5, 0.6, 0.5, 0, 0.25, 0),
+                p(0.8, 0.8, 0.8, 0, 0.85, 0));
+            case ROOK -> List.of(
+                p(2.0, 0.3, 2.0, 0, 0, 0),
+                p(1.2, 1.2, 1.2, 0, 0.3, 0),
+                p(1.6, 0.4, 1.6, 0, 1.5, 0),
+                p(0.4, 0.4, 0.4, 0.6, 1.9, 0.6),
+                p(0.4, 0.4, 0.4, -0.6, 1.9, 0.6),
+                p(0.4, 0.4, 0.4, 0.6, 1.9, -0.6),
+                p(0.4, 0.4, 0.4, -0.6, 1.9, -0.6));
+            case KNIGHT -> List.of(
+                p(1.8, 0.3, 1.8, 0, 0, 0),
+                p(1.0, 1.0, 1.0, 0, 0.3, 0.1),
+                p(0.9, 1.0, 0.9, 0, 1.3, -0.1),
+                p(0.6, 0.5, 0.7, 0, 1.4, -0.8),
+                p(0.25, 0.35, 0.25, 0.25, 2.3, 0.1),
+                p(0.25, 0.35, 0.25, -0.25, 2.3, 0.1));
+            case BISHOP -> List.of(
+                p(1.8, 0.3, 1.8, 0, 0, 0),
+                p(0.9, 1.2, 0.9, 0, 0.3, 0),
+                p(1.2, 0.2, 1.2, 0, 1.5, 0),
+                p(0.7, 0.9, 0.7, 0, 1.7, 0),
+                g(0.25, 0.25, 0.25, 0, 2.6, 0));
+            case QUEEN -> List.of(
+                p(2.0, 0.3, 2.0, 0, 0, 0),
+                p(1.0, 1.6, 1.0, 0, 0.3, 0),
+                p(1.5, 0.25, 1.5, 0, 1.9, 0),
+                p(0.35, 0.5, 0.35, 0.55, 2.15, 0.55),
+                p(0.35, 0.5, 0.35, -0.55, 2.15, 0.55),
+                p(0.35, 0.5, 0.35, 0.55, 2.15, -0.55),
+                p(0.35, 0.5, 0.35, -0.55, 2.15, -0.55),
+                g(0.5, 0.5, 0.5, 0, 2.15, 0));
+            case KING -> List.of(
+                p(2.0, 0.3, 2.0, 0, 0, 0),
+                p(1.1, 1.8, 1.1, 0, 0.3, 0),
+                p(1.5, 0.25, 1.5, 0, 2.1, 0),
+                p(0.9, 0.45, 0.9, 0, 2.35, 0),
+                g(0.3, 0.9, 0.3, 0, 2.8, 0),
+                g(0.9, 0.3, 0.3, 0, 3.1, 0));
+            default -> List.of();
+        };
+    }
+
     public void clearPieces() {
-        run("kill @e[type=minecraft:text_display,tag=" + TAG + "]");
+        run("kill @e[tag=" + TAG + "]");
     }
 
     /** Efface et redessine toutes les pièces d'après l'état du plateau. */
@@ -113,37 +176,32 @@ public class BoardRenderer {
     }
 
     private void summonPiece(Piece piece, Square sq) {
-        double x = cellX(fileIndex(sq)) + CELL / 2.0;
-        double z = cellZ(rankIndex(sq)) + CELL / 2.0;
-        double y = y0 + 1.6; // le glyphe est centré sur ce point
+        double centerX = cellX(fileIndex(sq)) + CELL / 2.0;
+        double centerZ = cellZ(rankIndex(sq)) + CELL / 2.0;
+        double floor = y0 + 1;
 
         boolean white = piece.getPieceSide() == Side.WHITE;
-        String color = white ? "#FFFFFF" : "#000000";
-        // Fond semi-transparent de couleur opposée pour rester lisible sur toutes les cases
-        int background = white ? 0xA0404040 : 0xA0D0D0D0;
+        String material = white ? "minecraft:white_concrete" : "minecraft:black_concrete";
+        double dir = white ? 1 : -1; // les Blancs regardent le nord (-Z), les Noirs le sud
+        String sqTag = SQ_TAG_PREFIX + sq.toString().toLowerCase(Locale.ROOT);
+        String tags = "Tags:[\"" + TAG + "\",\"" + sqTag + "\"]";
 
-        String nbt = String.format(Locale.ROOT,
-                "{Tags:[\"%s\",\"fpschess_%s\"],"
-              + "text:'{\"text\":\"%s\",\"color\":\"%s\"}',"
-              + "billboard:\"center\",background:%d,"
-              + "transformation:{left_rotation:[0f,0f,0f,1f],right_rotation:[0f,0f,0f,1f],"
-              + "translation:[0f,0f,0f],scale:[7f,7f,7f]}}",
-                TAG, sq.toString().toLowerCase(Locale.ROOT), glyph(piece), color, background);
+        for (Part part : parts(piece.getPieceType())) {
+            String block = part.gold() ? "minecraft:gold_block" : material;
+            double tx = part.cx() * dir - part.sx() / 2;
+            double tz = part.cz() * dir - part.sz() / 2;
+            String nbt = String.format(Locale.ROOT,
+                    "{%s,block_state:{Name:\"%s\"},transformation:{left_rotation:[0f,0f,0f,1f],"
+                  + "right_rotation:[0f,0f,0f,1f],translation:[%.3ff,0f,%.3ff],scale:[%.3ff,%.3ff,%.3ff]}}",
+                    tags, block, tx, tz, part.sx(), part.sy(), part.sz());
+            run(String.format(Locale.ROOT, "summon minecraft:block_display %.3f %.3f %.3f %s",
+                    centerX, floor + part.y(), centerZ, nbt));
+        }
 
-        run(String.format(Locale.ROOT, "summon minecraft:text_display %.2f %.2f %.2f %s", x, y, z, nbt));
-    }
-
-    /** Symboles d'échecs Unicode (versions pleines). */
-    private static String glyph(Piece piece) {
-        return switch (piece.getPieceType()) {
-            case KING -> "\u265A";
-            case QUEEN -> "\u265B";
-            case ROOK -> "\u265C";
-            case BISHOP -> "\u265D";
-            case KNIGHT -> "\u265E";
-            case PAWN -> "\u265F";
-            default -> "?";
-        };
+        // Zone cliquable invisible autour de la pièce
+        run(String.format(Locale.ROOT,
+                "summon minecraft:interaction %.3f %.3f %.3f {%s,width:1.8f,height:2.6f,response:1b}",
+                centerX, floor, centerZ, tags));
     }
 
     // ---------- Nettoyage ----------
