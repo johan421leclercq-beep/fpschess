@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "fpschess",
+  "version": "${version}",
+  "name": "FPS Chess",
+  "description": "Echecs où chaque prise se règle en duel PvP dans une arène.",
+  "environment": "*",
+  "entrypoints": {
+    "main": ["fr.fpschess.FpsChessMod"]
+  },
+  "depends": {
+    "fabricloader": ">=0.16.0",
+    "minecraft": "~1.21.1",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}
