@@ -1,14 +1,18 @@
 package fr.fpschess;
 
 import com.github.bhlangonijr.chesslib.Board;
+import com.github.bhlangonijr.chesslib.File;
 import com.github.bhlangonijr.chesslib.Piece;
+import com.github.bhlangonijr.chesslib.Rank;
 import com.github.bhlangonijr.chesslib.Side;
 import com.github.bhlangonijr.chesslib.Square;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.util.math.BlockPos;
 
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * Construit le plateau dans le monde et affiche les pièces.
@@ -58,15 +62,37 @@ public class BoardRenderer {
         // Dégage l'espace au-dessus
         run(String.format(Locale.ROOT, "fill %d %d %d %d %d %d minecraft:air",
                 x0, y0 + 1, z0, x0 + size - 1, y0 + 6, z0 + size - 1));
+        drawFloor(Map.of());
+    }
+
+    /** Dessine le sol. 'overrides' permet de colorer certaines cases (sélection, coups possibles). */
+    public void drawFloor(Map<Square, String> overrides) {
         for (int f = 0; f < 8; f++) {
             for (int r = 0; r < 8; r++) {
-                String block = ((f + r) % 2 == 0) ? DARK : LIGHT; // a1 est sombre
+                Square sq = Square.encode(Rank.values()[r], File.values()[f]);
+                String block = overrides.getOrDefault(sq, ((f + r) % 2 == 0) ? DARK : LIGHT); // a1 est sombre
                 int x = cellX(f);
                 int z = cellZ(r);
                 run(String.format(Locale.ROOT, "fill %d %d %d %d %d %d %s",
                         x, y0, z, x + CELL - 1, y0, z + CELL - 1, block));
             }
         }
+    }
+
+    public ServerWorld world() {
+        return world;
+    }
+
+    /** Renvoie la case d'échecs correspondant à un bloc du sol, ou null si hors plateau. */
+    public Square squareAt(BlockPos pos) {
+        if (pos.getY() != y0) return null;
+        int dx = pos.getX() - x0;
+        int dz = pos.getZ() - z0;
+        int size = 8 * CELL;
+        if (dx < 0 || dz < 0 || dx >= size || dz >= size) return null;
+        int f = dx / CELL;
+        int r = 7 - (dz / CELL);
+        return Square.encode(Rank.values()[r], File.values()[f]);
     }
 
     // ---------- Pièces ----------
