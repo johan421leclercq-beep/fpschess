@@ -222,33 +222,87 @@ public class BoardRenderer {
         return world.getRegistryKey().getValue().toString();
     }
 
+    private void fill(int x1, int y1, int z1, int x2, int y2, int z2, String block) {
+        run(String.format(Locale.ROOT, "fill %d %d %d %d %d %d %s", x1, y1, z1, x2, y2, z2, block));
+    }
+
+    private void set(int x, int y, int z, String block) {
+        run(String.format(Locale.ROOT, "setblock %d %d %d %s", x, y, z, block));
+    }
+
+    /** Matériau du sol d'une case de l'arène (coordonnées locales 0..24). */
+    private static String arenaFloor(int x, int z) {
+        if (x >= 2 && x <= 4 && z >= 11 && z <= 13) return "minecraft:red_concrete";   // départ attaquant
+        if (x >= 20 && x <= 22 && z >= 11 && z <= 13) return "minecraft:blue_concrete"; // départ défenseur
+        double d = Math.hypot(x - 12, z - 12);
+        if (d <= 2.5) return "minecraft:chiseled_polished_blackstone";
+        if (d >= 4.5 && d <= 5.6) return "minecraft:red_terracotta";
+        return ((x + z) % 2 == 0) ? "minecraft:deepslate_tiles" : "minecraft:polished_deepslate";
+    }
+
+    /** Colisée de pierre sombre : sol en damier avec anneau central, colonnes, poutres, lanternes, bannières. */
     public void buildArena() {
-        int ax = arenaX(), e = ARENA_SIZE - 1;
-        // Boîte fermée (murs + plafond), intérieur vidé
-        run(String.format(Locale.ROOT, "fill %d %d %d %d %d %d minecraft:stone_bricks hollow",
-                ax, y0, z0, ax + e, y0 + 9, z0 + e));
-        run(String.format(Locale.ROOT, "fill %d %d %d %d %d %d minecraft:deepslate_tiles",
-                ax, y0, z0, ax + e, y0, z0 + e));
-        // Piliers pour se mettre à couvert
-        int[][] pillars = {{10, 5}, {13, 5}, {10, 18}, {13, 18}};
-        for (int[] pl : pillars) {
-            run(String.format(Locale.ROOT, "fill %d %d %d %d %d %d minecraft:chiseled_stone_bricks",
-                    ax + pl[0], y0 + 1, z0 + pl[1], ax + pl[0] + 1, y0 + 3, z0 + pl[1] + 1));
-        }
-        run(String.format(Locale.ROOT, "fill %d %d %d %d %d %d minecraft:chiseled_stone_bricks",
-                ax + 12, y0 + 1, z0 + 12, ax + 12, y0 + 2, z0 + 12));
-        // Lumière invisible en grille : aucun endroit à 0 de luminosité, donc aucun monstre ne peut apparaître
-        for (int lx = 2; lx < ARENA_SIZE; lx += 4) {
-            for (int lz = 2; lz < ARENA_SIZE; lz += 4) {
-                run(String.format(Locale.ROOT, "setblock %d %d %d minecraft:light[level=15]",
-                        ax + lx, y0 + 5, z0 + lz));
+        int ax = arenaX(), y = y0, z = z0, e = ARENA_SIZE - 1;
+
+        // 1. Coque fermée (murs + plafond), intérieur vidé
+        fill(ax, y, z, ax + e, y + 9, z + e, "minecraft:stone_bricks hollow");
+
+        // 2. Sol : damier, anneau rouge, disque central, zones de départ rouge (ouest) et bleue (est)
+        fill(ax, y, z, ax + e, y, z + e, "minecraft:deepslate_tiles");
+        for (int x = 0; x < ARENA_SIZE; x++) {
+            for (int dz = 0; dz < ARENA_SIZE; dz++) {
+                String block = arenaFloor(x, dz);
+                if (!block.equals("minecraft:deepslate_tiles")) {
+                    set(ax + x, y, z + dz, block);
+                }
             }
         }
-        // Lumière visible au plafond
-        int[][] lamps = {{6, 6}, {18, 6}, {6, 18}, {18, 18}, {12, 12}};
-        for (int[] l : lamps) {
-            run(String.format(Locale.ROOT, "setblock %d %d %d minecraft:sea_lantern",
-                    ax + l[0], y0 + 9, z0 + l[1]));
+
+        // 3. Murs : soubassement sombre, frise sculptée, plafond en briques noires
+        fill(ax, y + 1, z, ax + e, y + 1, z + e, "minecraft:polished_blackstone_bricks hollow");
+        fill(ax, y + 7, z, ax + e, y + 7, z + e, "minecraft:chiseled_stone_bricks hollow");
+        fill(ax, y + 9, z, ax + e, y + 9, z + e, "minecraft:polished_blackstone_bricks");
+
+        // 4. Colonnes en bois le long des murs
+        int[] cols = {4, 8, 12, 16, 20};
+        for (int c : cols) {
+            fill(ax + 1, y + 1, z + c, ax + 1, y + 7, z + c, "minecraft:stripped_dark_oak_log[axis=y]");
+            fill(ax + 23, y + 1, z + c, ax + 23, y + 7, z + c, "minecraft:stripped_dark_oak_log[axis=y]");
+            fill(ax + c, y + 1, z + 1, ax + c, y + 7, z + 1, "minecraft:stripped_dark_oak_log[axis=y]");
+            fill(ax + c, y + 1, z + 23, ax + c, y + 7, z + 23, "minecraft:stripped_dark_oak_log[axis=y]");
+        }
+
+        // 5. Poutres au plafond et lanternes suspendues
+        int[] beams = {4, 12, 20};
+        for (int bz : beams) {
+            fill(ax + 1, y + 8, z + bz, ax + 23, y + 8, z + bz, "minecraft:dark_oak_log[axis=x]");
+            for (int bx : new int[]{6, 12, 18}) {
+                set(ax + bx, y + 7, z + bz, "minecraft:lantern[hanging=true]");
+            }
+        }
+
+        // 6. Bannières : rouge côté attaquant (ouest), bleue côté défenseur (est)
+        for (int bz : new int[]{6, 10, 14, 18}) {
+            set(ax + 1, y + 4, z + bz, "minecraft:red_wall_banner[facing=east]");
+            set(ax + 23, y + 4, z + bz, "minecraft:blue_wall_banner[facing=west]");
+        }
+
+        // 7. Couvertures : colonnes en ruine et estrade centrale
+        int[][] ruins = {{10, 5, 3}, {13, 18, 3}, {13, 5, 2}, {10, 18, 2}};
+        for (int[] r : ruins) {
+            String brick = r[2] == 3 ? "minecraft:mossy_stone_bricks" : "minecraft:cracked_stone_bricks";
+            fill(ax + r[0], y + 1, z + r[1], ax + r[0] + 1, y + r[2], z + r[1] + 1, brick);
+            fill(ax + r[0], y + r[2] + 1, z + r[1], ax + r[0] + 1, y + r[2] + 1, z + r[1] + 1,
+                    "minecraft:stone_brick_slab[type=bottom]");
+        }
+        fill(ax + 11, y + 1, z + 11, ax + 13, y + 1, z + 13, "minecraft:polished_blackstone_brick_slab[type=bottom]");
+        set(ax + 12, y + 1, z + 12, "minecraft:gold_block");
+
+        // 8. Lumière invisible en grille : aucun endroit à 0 de luminosité, aucun monstre ne peut apparaître
+        for (int lx = 2; lx < ARENA_SIZE; lx += 4) {
+            for (int lz = 2; lz < ARENA_SIZE; lz += 4) {
+                set(ax + lx, y + 5, z + lz, "minecraft:light[level=15]");
+            }
         }
     }
 
