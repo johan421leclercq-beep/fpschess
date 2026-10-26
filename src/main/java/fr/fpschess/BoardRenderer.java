@@ -237,7 +237,14 @@ public class BoardRenderer {
         }
         run(String.format(Locale.ROOT, "fill %d %d %d %d %d %d minecraft:chiseled_stone_bricks",
                 ax + 12, y0 + 1, z0 + 12, ax + 12, y0 + 2, z0 + 12));
-        // Lumière au plafond
+        // Lumière invisible en grille : aucun endroit à 0 de luminosité, donc aucun monstre ne peut apparaître
+        for (int lx = 2; lx < ARENA_SIZE; lx += 4) {
+            for (int lz = 2; lz < ARENA_SIZE; lz += 4) {
+                run(String.format(Locale.ROOT, "setblock %d %d %d minecraft:light[level=15]",
+                        ax + lx, y0 + 5, z0 + lz));
+            }
+        }
+        // Lumière visible au plafond
         int[][] lamps = {{6, 6}, {18, 6}, {6, 18}, {18, 18}, {12, 12}};
         for (int[] l : lamps) {
             run(String.format(Locale.ROOT, "setblock %d %d %d minecraft:sea_lantern",
@@ -245,12 +252,11 @@ public class BoardRenderer {
         }
     }
 
-    public void clearArenaItems() {
+    /** Supprime tout ce qui n'est pas un joueur dans l'arène (objets, orbes, monstres). */
+    public void clearArenaEntities() {
         run(String.format(Locale.ROOT,
-                "kill @e[type=minecraft:item,x=%d,y=%d,z=%d,dx=%d,dy=10,dz=%d]",
+                "kill @e[type=!minecraft:player,x=%d,y=%d,z=%d,dx=%d,dy=10,dz=%d]",
                 arenaX(), y0, z0, ARENA_SIZE, ARENA_SIZE));
-        run("kill @e[type=minecraft:experience_orb,x=" + arenaX() + ",y=" + y0 + ",z=" + z0
-                + ",dx=" + ARENA_SIZE + ",dy=10,dz=" + ARENA_SIZE + "]");
     }
 
     // ---------- Nettoyage ----------

@@ -6,6 +6,7 @@ import net.minecraft.item.ItemStack;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.text.Text;
+import net.minecraft.world.GameMode;
 
 import java.util.HashMap;
 import java.util.Locale;
@@ -28,7 +29,7 @@ public final class DuelManager {
 
     private static class Saved {
         ItemStack[] stacks;
-        String gameMode;
+        GameMode gameMode;
         double x, y, z;
         float yaw, pitch;
         String dimension;
@@ -54,6 +55,7 @@ public final class DuelManager {
     public static void start(MinecraftServer server, BoardRenderer r, CaptureInfo c,
                              ServerPlayerEntity attacker, ServerPlayerEntity defender,
                              Consumer<Boolean> onFinish) {
+        r.clearArenaEntities(); // chasse les monstres éventuels avant le duel
         Duel d = new Duel();
         d.renderer = r;
         d.attacker = attacker.getUuid();
@@ -85,7 +87,7 @@ public final class DuelManager {
         for (int i = 0; i < size; i++) {
             s.stacks[i] = p.getInventory().getStack(i).copy();
         }
-        s.gameMode = p.interactionManager.getGameMode().getName();
+        s.gameMode = p.interactionManager.getGameMode();
         s.x = p.getX();
         s.y = p.getY();
         s.z = p.getZ();
@@ -102,7 +104,7 @@ public final class DuelManager {
         p.clearStatusEffects();
         p.setHealth(p.getMaxHealth());
         p.getHungerManager().setFoodLevel(20);
-        r.run("gamemode adventure " + sel);
+        p.changeGameMode(GameMode.ADVENTURE);
         double[] sp = r.arenaSpawn(spawnIndex);
         r.run(String.format(Locale.ROOT, "execute in %s run tp %s %.2f %.2f %.2f %.1f 0",
                 r.dimension(), sel, sp[0], sp[1], sp[2], sp[3]));
@@ -201,7 +203,7 @@ public final class DuelManager {
         if (d.dummy != null) {
             d.renderer.run("kill " + d.dummy);
         }
-        d.renderer.clearArenaItems();
+        d.renderer.clearArenaEntities();
         current = null;
         d.onFinish.accept(d.attackerWon);
     }
@@ -219,7 +221,7 @@ public final class DuelManager {
         p.setHealth(p.getMaxHealth());
         p.getHungerManager().setFoodLevel(20);
         String sel = p.getUuidAsString();
-        r.run("gamemode " + s.gameMode + " " + sel);
+        p.changeGameMode(s.gameMode);
         r.run(String.format(Locale.ROOT, "execute in %s run tp %s %.2f %.2f %.2f %.1f %.1f",
                 s.dimension, sel, s.x, s.y, s.z, s.yaw, s.pitch));
     }
