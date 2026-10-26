@@ -22,7 +22,7 @@ import java.util.UUID;
  */
 public class ClickHandler {
 
-    public enum Mode { SOLO, FRIEND }
+    public enum Mode { NONE, SOLO, FRIEND }
 
     private static final String SELECTED = "minecraft:yellow_concrete";
     private static final String MOVE = "minecraft:lime_concrete";
@@ -32,7 +32,9 @@ public class ClickHandler {
     private final BoardRenderer renderer;
     private Square selected = null;
 
-    private Mode mode = Mode.SOLO;
+    private Mode mode = Mode.NONE; // il faut choisir solo ou ami avant de jouer
+    private UUID owner = null;     // en mode solo : le seul joueur autorisé
+    private String ownerName = "";
     private UUID white = null;
     private UUID black = null;
 
@@ -45,8 +47,10 @@ public class ClickHandler {
 
     public Mode mode() { return mode; }
 
-    public void setSolo() {
+    public void setSolo(ServerPlayerEntity player) {
         mode = Mode.SOLO;
+        owner = player.getUuid();
+        ownerName = player.getName().getString();
         white = null;
         black = null;
         reset();
@@ -82,6 +86,14 @@ public class ClickHandler {
         }
         if (game.isOver()) {
             tell(player, "La partie est terminée. Tape /fpschess new pour rejouer.");
+            return;
+        }
+        if (mode == Mode.NONE) {
+            tell(player, "Choisis d'abord un mode avec les boutons du chat (ou /fpschess mode solo | friend).");
+            return;
+        }
+        if (mode == Mode.SOLO && !player.getUuid().equals(owner)) {
+            tell(player, "Mode solo : seul " + ownerName + " peut jouer. Passez en mode ami pour jouer à deux.");
             return;
         }
         if (mode == Mode.FRIEND) {

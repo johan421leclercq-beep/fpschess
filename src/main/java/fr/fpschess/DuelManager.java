@@ -76,8 +76,10 @@ public final class DuelManager {
         }
         current = d;
 
-        String subtitle = Kits.pieceName(atkType) + " contre " + Kits.pieceName(defType);
-        announce(d, server, subtitle);
+        FpsChessMod.LOGGER.info("Duel : attaquant {} ({}), défenseur {} ({})",
+                attacker.getName().getString(), Kits.pieceName(atkType),
+                defender == null ? "zombie" : defender.getName().getString(), Kits.pieceName(defType));
+        announce(d, atkType, defType);
     }
 
     private static void save(Duel d, ServerPlayerEntity p) {
@@ -128,10 +130,15 @@ public final class DuelManager {
         Kits.apply(r, d.dummy.toString(), type, true);
     }
 
-    private static void announce(Duel d, MinecraftServer server, String subtitle) {
+    /** Chaque joueur voit son rôle et la pièce qu'il incarne. */
+    private static void announce(Duel d, PieceType atk, PieceType def) {
         for (UUID id : d.saved.keySet()) {
+            boolean isAttacker = id.equals(d.attacker);
+            String sub = isAttacker
+                    ? "Tu attaques avec : " + Kits.pieceName(atk) + " (contre " + Kits.pieceName(def) + ")"
+                    : "Tu défends avec : " + Kits.pieceName(def) + " (contre " + Kits.pieceName(atk) + ")";
             String sel = id.toString();
-            d.renderer.run("title " + sel + " subtitle {\"text\":\"" + subtitle + "\",\"color\":\"gray\"}");
+            d.renderer.run("title " + sel + " subtitle {\"text\":\"" + sub + "\",\"color\":\"gray\"}");
             d.renderer.run("title " + sel + " title {\"text\":\"DUEL\",\"color\":\"red\",\"bold\":true}");
         }
     }

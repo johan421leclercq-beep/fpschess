@@ -143,7 +143,7 @@ public class FpsChessMod implements ModInitializer {
                             return 0;
                         }
                         if (duelBusy(ctx.getSource())) return 0;
-                        handler.setSolo();
+                        handler.setSolo(ctx.getSource().getPlayerOrThrow());
                         ctx.getSource().sendFeedback(() -> Text.literal(
                             "Mode solo : tu joues les deux camps. Les duels se font contre un zombie."
                             + " (La difficulté ne doit pas être en pacifique : /difficulty normal)")
