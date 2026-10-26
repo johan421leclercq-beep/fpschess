@@ -23,6 +23,7 @@ import java.util.Locale;
 public class ChessGame {
 
     private final Board board = new Board();
+    private Side forcedWinner = null; // victoire décidée par un duel (roi battu)
 
     public Board board() {
         return board;
@@ -33,6 +34,7 @@ public class ChessGame {
     }
 
     public void reset() {
+        forcedWinner = null;
         board.loadFromFen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
     }
 
@@ -105,6 +107,25 @@ public class ChessGame {
         Side attackerSide = capture.attacker().getPieceSide();
         board.unsetPiece(capture.attacker(), capture.from());
         board.setSideToMove(attackerSide.flip());
+        fixCastlingRights();
+    }
+
+    /** Un roi a perdu son duel : la partie est terminée. */
+    public void forceWin(Side winner) {
+        forcedWinner = winner;
+    }
+
+    /** Après le retrait d'une pièce, supprime les droits de roque devenus impossibles. */
+    private void fixCastlingRights() {
+        String[] f = board.getFen().split(" ");
+        StringBuilder c = new StringBuilder();
+        if (f[2].contains("K") && board.getPiece(Square.E1) == Piece.WHITE_KING && board.getPiece(Square.H1) == Piece.WHITE_ROOK) c.append('K');
+        if (f[2].contains("Q") && board.getPiece(Square.E1) == Piece.WHITE_KING && board.getPiece(Square.A1) == Piece.WHITE_ROOK) c.append('Q');
+        if (f[2].contains("k") && board.getPiece(Square.E8) == Piece.BLACK_KING && board.getPiece(Square.H8) == Piece.BLACK_ROOK) c.append('k');
+        if (f[2].contains("q") && board.getPiece(Square.E8) == Piece.BLACK_KING && board.getPiece(Square.A8) == Piece.BLACK_ROOK) c.append('q');
+        f[2] = c.length() == 0 ? "-" : c.toString();
+        f[3] = "-"; // plus de prise en passant possible
+        board.loadFromFen(String.join(" ", f));
     }
 
     // ---------- État de la partie ----------
@@ -120,10 +141,13 @@ public class ChessGame {
     }
 
     public boolean isOver() {
-        return board.isMated() || board.isStaleMate() || board.isDraw();
+        return forcedWinner != null || board.isMated() || board.isStaleMate() || board.isDraw();
     }
 
     public String statusText() {
+        if (forcedWinner != null) {
+            return "Le roi est tombé en duel ! Victoire des " + (forcedWinner == Side.WHITE ? "Blancs" : "Noirs") + ".";
+        }
         if (board.isMated()) {
             Side winner = board.getSideToMove().flip();
             return "Échec et mat ! Victoire des " + (winner == Side.WHITE ? "Blancs" : "Noirs") + ".";

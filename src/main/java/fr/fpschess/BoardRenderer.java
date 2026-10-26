@@ -44,7 +44,7 @@ public class BoardRenderer {
         this.z0 = z0;
     }
 
-    private void run(String command) {
+    public void run(String command) {
         ServerCommandSource src = server.getCommandSource().withWorld(world).withSilent();
         server.getCommandManager().executeWithPrefix(src, command);
     }
@@ -204,10 +204,62 @@ public class BoardRenderer {
                 centerX, floor, centerZ, tags));
     }
 
+    // ---------- Arène de duel (à l'est du plateau) ----------
+
+    public static final int ARENA_SIZE = 25;
+
+    public int arenaX() { return x0 + 8 * CELL + 8; }
+
+    /** Spawn 0 = côté ouest (regarde l'est), spawn 1 = côté est (regarde l'ouest). {x, y, z, yaw} */
+    public double[] arenaSpawn(int index) {
+        double z = z0 + ARENA_SIZE / 2.0;
+        return index == 0
+                ? new double[]{arenaX() + 3.5, y0 + 1, z, -90}
+                : new double[]{arenaX() + ARENA_SIZE - 3.5, y0 + 1, z, 90};
+    }
+
+    public String dimension() {
+        return world.getRegistryKey().getValue().toString();
+    }
+
+    public void buildArena() {
+        int ax = arenaX(), e = ARENA_SIZE - 1;
+        // Boîte fermée (murs + plafond), intérieur vidé
+        run(String.format(Locale.ROOT, "fill %d %d %d %d %d %d minecraft:stone_bricks hollow",
+                ax, y0, z0, ax + e, y0 + 9, z0 + e));
+        run(String.format(Locale.ROOT, "fill %d %d %d %d %d %d minecraft:deepslate_tiles",
+                ax, y0, z0, ax + e, y0, z0 + e));
+        // Piliers pour se mettre à couvert
+        int[][] pillars = {{10, 5}, {13, 5}, {10, 18}, {13, 18}};
+        for (int[] pl : pillars) {
+            run(String.format(Locale.ROOT, "fill %d %d %d %d %d %d minecraft:chiseled_stone_bricks",
+                    ax + pl[0], y0 + 1, z0 + pl[1], ax + pl[0] + 1, y0 + 3, z0 + pl[1] + 1));
+        }
+        run(String.format(Locale.ROOT, "fill %d %d %d %d %d %d minecraft:chiseled_stone_bricks",
+                ax + 12, y0 + 1, z0 + 12, ax + 12, y0 + 2, z0 + 12));
+        // Lumière au plafond
+        int[][] lamps = {{6, 6}, {18, 6}, {6, 18}, {18, 18}, {12, 12}};
+        for (int[] l : lamps) {
+            run(String.format(Locale.ROOT, "setblock %d %d %d minecraft:sea_lantern",
+                    ax + l[0], y0 + 9, z0 + l[1]));
+        }
+    }
+
+    public void clearArenaItems() {
+        run(String.format(Locale.ROOT,
+                "kill @e[type=minecraft:item,x=%d,y=%d,z=%d,dx=%d,dy=10,dz=%d]",
+                arenaX(), y0, z0, ARENA_SIZE, ARENA_SIZE));
+        run("kill @e[type=minecraft:experience_orb,x=" + arenaX() + ",y=" + y0 + ",z=" + z0
+                + ",dx=" + ARENA_SIZE + ",dy=10,dz=" + ARENA_SIZE + "]");
+    }
+
     // ---------- Nettoyage ----------
 
     public void removeAll() {
         clearPieces();
+        run("kill @e[tag=fpschess_dummy]");
+        run(String.format(Locale.ROOT, "fill %d %d %d %d %d %d minecraft:air",
+                arenaX(), y0, z0, arenaX() + ARENA_SIZE - 1, y0 + 9, z0 + ARENA_SIZE - 1));
         int size = 8 * CELL;
         run(String.format(Locale.ROOT, "fill %d %d %d %d %d %d minecraft:air",
                 x0, y0, z0, x0 + size - 1, y0 + 6, z0 + size - 1));

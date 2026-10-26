@@ -1,8 +1,10 @@
 package fr.fpschess;
 
 import com.github.bhlangonijr.chesslib.Piece;
+import com.github.bhlangonijr.chesslib.PieceType;
 import com.github.bhlangonijr.chesslib.Side;
 import com.github.bhlangonijr.chesslib.Square;
+import com.github.bhlangonijr.chesslib.move.Move;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.text.Text;
@@ -10,12 +12,17 @@ import net.minecraft.text.Text;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.UUID;
 
 /**
- * Gère les clics sur le plateau : 1er clic = choisir une pièce, 2e clic = choisir la destination.
- * Pour l'instant n'importe quel joueur peut jouer les deux camps (étape 5/6 : joueurs assignés).
+ * Gère les clics sur le plateau : 1er clic = choisir une pièce, 2e clic = destination.
+ * Si le coup est une prise, un duel est lancé. Deux modes :
+ *  - SOLO : tu joues les deux camps, le défenseur est un zombie équipé.
+ *  - FRIEND : un joueur par camp, duel joueur contre joueur.
  */
 public class ClickHandler {
+
+    public enum Mode { SOLO, FRIEND }
 
     private static final String SELECTED = "minecraft:yellow_concrete";
     private static final String MOVE = "minecraft:lime_concrete";
@@ -25,10 +32,42 @@ public class ClickHandler {
     private final BoardRenderer renderer;
     private Square selected = null;
 
+    private Mode mode = Mode.SOLO;
+    private UUID white = null;
+    private UUID black = null;
+
     public ClickHandler(ChessGame game, BoardRenderer renderer) {
         this.game = game;
         this.renderer = renderer;
     }
+
+    // ---------- Modes ----------
+
+    public Mode mode() { return mode; }
+
+    public void setSolo() {
+        mode = Mode.SOLO;
+        white = null;
+        black = null;
+        reset();
+    }
+
+    public void setFriend(ServerPlayerEntity whitePlayer) {
+        mode = Mode.FRIEND;
+        white = whitePlayer.getUuid();
+        black = null;
+        reset();
+    }
+
+    /** Renvoie un message d'erreur, ou null si tout est bon. */
+    public String join(ServerPlayerEntity p) {
+        if (mode != Mode.FRIEND) return "Le mode ami n'est pas activé.";
+        if (p.getUuid().equals(white)) return "Tu joues déjà les Blancs.";
+        black = p.getUuid();
+        return null;
+    }
+
+    // ---------- Clics ----------
 
     /** Annule la sélection et remet le sol normal. */
     public void reset() {
@@ -37,15 +76,29 @@ public class ClickHandler {
     }
 
     public void onClick(ServerPlayerEntity player, Square sq) {
+        if (DuelManager.isActive()) {
+            tell(player, "Un duel est en cours...");
+            return;
+        }
         if (game.isOver()) {
             tell(player, "La partie est terminée. Tape /fpschess new pour rejouer.");
             return;
+        }
+        if (mode == Mode.FRIEND) {
+            if (black == null) {
+                tell(player, "En attente du joueur Noir (il doit cliquer sur Rejoindre ou taper /fpschess join).");
+                return;
+            }
+            UUID expected = game.sideToMove() == Side.WHITE ? white : black;
+            if (!player.getUuid().equals(expected)) {
+                tell(player, "Ce n'est pas ton tour.");
+                return;
+            }
         }
 
         Piece clicked = game.board().getPiece(sq);
         boolean own = clicked != Piece.NONE && clicked.getPieceSide() == game.sideToMove();
 
-        // 1er clic : choisir une pièce
         if (selected == null) {
             if (!own) {
                 tell(player, "Clique sur une de tes pièces (trait aux " + turnName() + ").");
@@ -54,38 +107,69 @@ public class ClickHandler {
             select(sq);
             return;
         }
-
-        // Re-clic sur la même case : on annule
         if (sq == selected) {
             reset();
             return;
         }
-
-        // Clic sur une autre pièce à soi : on change de sélection
         if (own) {
             select(sq);
             return;
         }
 
-        // 2e clic : tenter le coup
         MoveResult r = game.tryMove(selected, sq, 'q');
         if (!r.legal()) {
             tell(player, r.message());
             return;
         }
 
-        String info = "";
-        if (r.capture() != null) {
-            CaptureInfo c = r.capture();
-            info = " PRISE : " + c.attacker() + " prend " + c.defender()
-                 + " en " + c.capturedSquare() + " (le duel arrive à l'étape 5).";
+        MinecraftServer server = player.getServer();
+        if (server == null) return;
+
+        // Pas de prise : coup normal
+        if (r.capture() == null) {
+            game.applyMove(r.move());
+            selected = null;
+            renderer.drawFloor(Map.of());
+            renderer.renderPieces(game.board());
+            broadcast(server, r.move() + " " + game.statusText());
+            return;
         }
-        game.applyMove(r.move());
+
+        // Prise : duel !
+        CaptureInfo c = r.capture();
+        Move move = r.move();
+        ServerPlayerEntity defender = null;
+        if (mode == Mode.FRIEND) {
+            UUID other = game.sideToMove() == Side.WHITE ? black : white;
+            defender = server.getPlayerManager().getPlayer(other);
+            if (defender == null) {
+                tell(player, "L'autre joueur est déconnecté.");
+                return;
+            }
+        }
         selected = null;
         renderer.drawFloor(Map.of());
-        renderer.renderPieces(game.board());
+        broadcast(server, "PRISE ! " + Kits.pieceName(c.attacker().getPieceType()) + " attaque "
+                + Kits.pieceName(c.defender().getPieceType()) + " en " + c.capturedSquare() + " : duel !");
+        DuelManager.start(server, renderer, c, player, defender, attackerWon -> afterDuel(server, move, c, attackerWon));
+    }
 
-        broadcast(player, r.move() + info + " " + game.statusText());
+    private void afterDuel(MinecraftServer server, Move move, CaptureInfo c, boolean attackerWon) {
+        String msg;
+        if (attackerWon) {
+            game.applyMove(move);
+            msg = Kits.pieceName(c.attacker().getPieceType()) + " gagne le duel et prend la case "
+                    + c.capturedSquare() + ".";
+        } else {
+            if (c.attacker().getPieceType() == PieceType.KING) {
+                game.forceWin(c.attacker().getPieceSide().flip());
+            } else {
+                game.removeLoserAttacker(c);
+            }
+            msg = Kits.pieceName(c.attacker().getPieceType()) + " perd le duel et est retiré du plateau.";
+        }
+        renderer.renderPieces(game.board());
+        broadcast(server, msg + " " + game.statusText());
     }
 
     private void select(Square sq) {
@@ -105,13 +189,10 @@ public class ClickHandler {
     }
 
     private static void tell(ServerPlayerEntity player, String message) {
-        player.sendMessage(Text.literal(message), true); // texte au-dessus de la barre d'objets
+        player.sendMessage(Text.literal(message), true);
     }
 
-    private static void broadcast(ServerPlayerEntity player, String message) {
-        MinecraftServer server = player.getServer();
-        if (server != null) {
-            server.getPlayerManager().broadcast(Text.literal(message), false);
-        }
+    private static void broadcast(MinecraftServer server, String message) {
+        server.getPlayerManager().broadcast(Text.literal(message), false);
     }
 }
