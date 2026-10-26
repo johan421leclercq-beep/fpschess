@@ -50,7 +50,7 @@ public class FpsChessMod implements ModInitializer {
     }
 
     /** Bouton cliquable dans le chat. */
-    private static Text button(String label, String command, Formatting color, String hover) {
+    static Text button(String label, String command, Formatting color, String hover) {
         return Text.literal(label).styled(s -> s
             .withColor(color)
             .withBold(true)
@@ -196,6 +196,26 @@ public class FpsChessMod implements ModInitializer {
                             .formatted(Formatting.GREEN), false);
                     return 1;
                 }))
+
+                // /fpschess promote q|r|b|n : choix de la promotion (ouvert à tous)
+                .then(CommandManager.literal("promote")
+                    .then(CommandManager.argument("piece", StringArgumentType.word()).executes(ctx -> {
+                        if (handler == null) {
+                            ctx.getSource().sendError(Text.literal("Aucune partie en cours."));
+                            return 0;
+                        }
+                        String choice = StringArgumentType.getString(ctx, "piece").toLowerCase(Locale.ROOT);
+                        if (!choice.matches("[qrbn]")) {
+                            ctx.getSource().sendError(Text.literal("Choisis q (dame), r (tour), b (fou) ou n (cavalier)."));
+                            return 0;
+                        }
+                        String err = handler.promote(ctx.getSource().getPlayerOrThrow(), choice.charAt(0));
+                        if (err != null) {
+                            ctx.getSource().sendError(Text.literal(err));
+                            return 0;
+                        }
+                        return 1;
+                    })))
 
                 // /fpschess resign : abandonner la partie (ouvert à tous)
                 .then(CommandManager.literal("resign").executes(ctx -> {

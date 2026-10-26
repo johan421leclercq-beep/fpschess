@@ -8,6 +8,7 @@ import com.github.bhlangonijr.chesslib.move.Move;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.text.Text;
+import net.minecraft.util.Formatting;
 
 import java.util.HashMap;
 import java.util.Locale;
@@ -35,6 +36,8 @@ public class ClickHandler {
     private Square selected = null;
     private Square lastFrom = null;
     private Square lastTo = null;
+    private Square pendingFrom = null; // promotion en attente de choix
+    private Square pendingTo = null;
 
     private Mode mode = Mode.NONE; // il faut choisir solo ou ami avant de jouer
     private UUID owner = null;     // en mode solo : le seul joueur autorisé
@@ -80,6 +83,8 @@ public class ClickHandler {
     /** Annule la sélection et remet le sol normal. */
     public void reset() {
         selected = null;
+        pendingFrom = null;
+        pendingTo = null;
         redrawFloor();
     }
 
@@ -134,6 +139,52 @@ public class ClickHandler {
         return null;
     }
 
+    /** Renvoie la raison pour laquelle ce joueur ne peut pas jouer maintenant, ou null s'il peut. */
+    private String permissionError(ServerPlayerEntity player) {
+        if (mode == Mode.NONE) {
+            return "Choisis d'abord un mode avec les boutons du chat (ou /fpschess mode solo | friend).";
+        }
+        if (mode == Mode.SOLO && !player.getUuid().equals(owner)) {
+            return "Mode solo : seul " + ownerName + " peut jouer. Passez en mode ami pour jouer à deux.";
+        }
+        if (mode == Mode.FRIEND) {
+            if (black == null) {
+                return "En attente du joueur Noir (il doit cliquer sur Rejoindre ou taper /fpschess join).";
+            }
+            UUID expected = game.sideToMove() == Side.WHITE ? white : black;
+            if (!player.getUuid().equals(expected)) {
+                return "Ce n'est pas ton tour.";
+            }
+        }
+        return null;
+    }
+
+    /** Appelé par /fpschess promote : termine un coup de promotion. Renvoie une erreur ou null. */
+    public String promote(ServerPlayerEntity player, char piece) {
+        if (pendingFrom == null) return "Aucune promotion en attente.";
+        if (DuelManager.isActive()) return "Un duel est en cours.";
+        if (game.isOver()) return "La partie est terminée.";
+        String denied = permissionError(player);
+        if (denied != null) return denied;
+        Square from = pendingFrom;
+        Square to = pendingTo;
+        pendingFrom = null;
+        pendingTo = null;
+        execute(player, from, to, piece);
+        return null;
+    }
+
+    private static Text promotionMenu() {
+        return Text.literal("Promotion ! Choisis la pièce :  ").formatted(Formatting.GOLD)
+            .append(FpsChessMod.button("[Dame]", "/fpschess promote q", Formatting.LIGHT_PURPLE, "Promouvoir en dame"))
+            .append(Text.literal(" "))
+            .append(FpsChessMod.button("[Tour]", "/fpschess promote r", Formatting.AQUA, "Promouvoir en tour"))
+            .append(Text.literal(" "))
+            .append(FpsChessMod.button("[Fou]", "/fpschess promote b", Formatting.GREEN, "Promouvoir en fou"))
+            .append(Text.literal(" "))
+            .append(FpsChessMod.button("[Cavalier]", "/fpschess promote n", Formatting.YELLOW, "Promouvoir en cavalier"));
+    }
+
     public void onClick(ServerPlayerEntity player, Square sq) {
         if (DuelManager.isActive()) {
             tell(player, "Un duel est en cours...");
@@ -143,25 +194,13 @@ public class ClickHandler {
             tell(player, "La partie est terminée. Tape /fpschess new pour rejouer.");
             return;
         }
-        if (mode == Mode.NONE) {
-            tell(player, "Choisis d'abord un mode avec les boutons du chat (ou /fpschess mode solo | friend).");
+        String denied = permissionError(player);
+        if (denied != null) {
+            tell(player, denied);
             return;
         }
-        if (mode == Mode.SOLO && !player.getUuid().equals(owner)) {
-            tell(player, "Mode solo : seul " + ownerName + " peut jouer. Passez en mode ami pour jouer à deux.");
-            return;
-        }
-        if (mode == Mode.FRIEND) {
-            if (black == null) {
-                tell(player, "En attente du joueur Noir (il doit cliquer sur Rejoindre ou taper /fpschess join).");
-                return;
-            }
-            UUID expected = game.sideToMove() == Side.WHITE ? white : black;
-            if (!player.getUuid().equals(expected)) {
-                tell(player, "Ce n'est pas ton tour.");
-                return;
-            }
-        }
+        pendingFrom = null; // un clic ailleurs annule une promotion en attente
+        pendingTo = null;
 
         Piece clicked = game.board().getPiece(sq);
         boolean own = clicked != Piece.NONE && clicked.getPieceSide() == game.sideToMove();
@@ -183,7 +222,19 @@ public class ClickHandler {
             return;
         }
 
-        MoveResult r = game.tryMove(selected, sq, 'q');
+        // Un pion qui arrive au bout : on demande quelle pièce il devient
+        if (game.needsPromotionChoice(selected, sq)) {
+            pendingFrom = selected;
+            pendingTo = sq;
+            player.sendMessage(promotionMenu(), false);
+            return;
+        }
+        execute(player, selected, sq, 'q');
+    }
+
+    /** Joue le coup from -> to : coup normal, ou duel en cas de prise. */
+    private void execute(ServerPlayerEntity player, Square from, Square to, char promo) {
+        MoveResult r = game.tryMove(from, to, promo);
         if (!r.legal()) {
             tell(player, r.message());
             return;

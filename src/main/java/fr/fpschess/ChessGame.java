@@ -75,6 +75,15 @@ public class ChessGame {
         return MoveResult.ok(move, detectCapture(moving, move));
     }
 
+    /** Vrai si le coup est un pion légal qui atteint la dernière rangée : il faut alors choisir la pièce. */
+    public boolean needsPromotionChoice(Square from, Square to) {
+        Piece p = board.getPiece(from);
+        if (p == Piece.NONE || p.getPieceType() != PieceType.PAWN || !isLastRank(to, p.getPieceSide())) {
+            return false;
+        }
+        return tryMove(from, to, 'q').legal();
+    }
+
     private CaptureInfo detectCapture(Piece moving, Move move) {
         Square from = move.getFrom();
         Square to = move.getTo();

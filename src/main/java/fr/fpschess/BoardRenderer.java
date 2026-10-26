@@ -12,6 +12,7 @@ import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.util.math.BlockPos;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
@@ -94,7 +95,10 @@ public class BoardRenderer {
     public void buildBoard() {
         int size = 8 * CELL;
         // Dégage l'espace, puis pose le cadre (2 blocs de large) autour du plateau
-        fill(x0 - 2, y0 + 1, z0 - 2, x0 + size + 1, y0 + 6, z0 + size + 1, "minecraft:air");
+        fill(x0 - 9, y0 + 1, z0 - 2, x0 + size + 8, y0 + 6, z0 + size + 1, "minecraft:air");
+        // Cimetières : une plateforme de chaque côté du cadre (Blancs prises à l'ouest, Noirs à l'est)
+        fill(x0 - 9, y0, z0, x0 - 3, y0, z0 + size - 1, "minecraft:polished_deepslate");
+        fill(x0 + size + 2, y0, z0, x0 + size + 8, y0, z0 + size - 1, "minecraft:polished_deepslate");
         fill(x0 - 2, y0, z0 - 2, x0 + size + 1, y0, z0 + size + 1, "minecraft:polished_blackstone_bricks");
         fill(x0 - 1, y0, z0 - 1, x0 + size, y0, z0 + size, "minecraft:stripped_dark_oak_log hollow");
         // Poteaux d'angle avec lanterne
@@ -136,13 +140,76 @@ public class BoardRenderer {
                 x, y0 + 1.4, z, text));
     }
 
+    // ---------- Cimetières ----------
+
+    private static final Piece[] WHITE_SET = {Piece.WHITE_QUEEN, Piece.WHITE_ROOK, Piece.WHITE_BISHOP,
+            Piece.WHITE_KNIGHT, Piece.WHITE_PAWN};
+    private static final Piece[] BLACK_SET = {Piece.BLACK_QUEEN, Piece.BLACK_ROOK, Piece.BLACK_BISHOP,
+            Piece.BLACK_KNIGHT, Piece.BLACK_PAWN};
+
+    private String graveSignature = "";
+
+    private static int startCount(Piece p) {
+        return switch (p.getPieceType()) {
+            case PAWN -> 8;
+            case QUEEN -> 1;
+            default -> 2;
+        };
+    }
+
+    /** Pièces d'un camp qui ont disparu du plateau (en tenant compte des promotions). */
+    private List<Piece> captured(Board board, Piece[] set) {
+        Map<Piece, Integer> now = new HashMap<>();
+        for (Square sq : Square.values()) {
+            if (sq == Square.NONE) continue;
+            Piece pc = board.getPiece(sq);
+            if (pc != Piece.NONE) now.merge(pc, 1, Integer::sum);
+        }
+        int promoted = 0; // pions devenus dame, tour, fou ou cavalier : ils ne sont pas "pris"
+        for (Piece pc : set) {
+            if (pc.getPieceType() != PieceType.PAWN) {
+                promoted += Math.max(0, now.getOrDefault(pc, 0) - startCount(pc));
+            }
+        }
+        List<Piece> out = new ArrayList<>();
+        for (Piece pc : set) {
+            int missing = startCount(pc) - now.getOrDefault(pc, 0);
+            if (pc.getPieceType() == PieceType.PAWN) missing -= promoted;
+            for (int i = 0; i < missing; i++) out.add(pc);
+        }
+        return out;
+    }
+
+    /** Redessine les cimetières seulement si les pièces prises ont changé. */
+    private void updateGraveyard(Board board) {
+        List<Piece> whiteLost = captured(board, WHITE_SET);
+        List<Piece> blackLost = captured(board, BLACK_SET);
+        String signature = whiteLost + "|" + blackLost;
+        if (signature.equals(graveSignature)) return;
+        graveSignature = signature;
+        run("kill @e[tag=fpschess_grave]");
+        placeGraves(whiteLost, true);
+        placeGraves(blackLost, false);
+    }
+
+    private void placeGraves(List<Piece> pieces, boolean west) {
+        int size = 8 * CELL;
+        for (int k = 0; k < pieces.size() && k < 16; k++) {
+            int col = k / 8;
+            int row = k % 8;
+            double cx = west ? x0 - 4.5 - 3.0 * col : x0 + size + 4.5 + 3.0 * col;
+            double cz = cellZ(row) + CELL / 2.0;
+            summonPieceAt(pieces.get(k), cx, cz, null);
+        }
+    }
+
     // ---------- Protection ----------
 
     /** Vrai si le bloc fait partie du plateau (cadre compris) ou de l'arène. */
     public boolean isProtected(BlockPos pos) {
         int x = pos.getX(), y = pos.getY(), z = pos.getZ();
         int size = 8 * CELL;
-        boolean inBoard = x >= x0 - 2 && x <= x0 + size + 1 && z >= z0 - 2 && z <= z0 + size + 1
+        boolean inBoard = x >= x0 - 9 && x <= x0 + size + 8 && z >= z0 - 2 && z <= z0 + size + 1
                 && y >= y0 && y <= y0 + 8;
         int ax = arenaX();
         boolean inArena = x >= ax && x <= ax + ARENA_SIZE - 1 && z >= z0 && z <= z0 + ARENA_SIZE - 1
@@ -312,6 +379,7 @@ public class BoardRenderer {
     public void clearPieces() {
         run("kill @e[tag=" + TAG + "]");
         shown.clear();
+        graveSignature = "";
     }
 
     /** Met l'affichage à jour : seules les cases qui ont changé sont redessinées. */
@@ -332,19 +400,25 @@ public class BoardRenderer {
                 shown.remove(sq);
             }
         }
+        updateGraveyard(board);
     }
 
     private void summonPiece(Piece piece, Square sq) {
-        double centerX = cellX(fileIndex(sq)) + CELL / 2.0;
-        double centerZ = cellZ(rankIndex(sq)) + CELL / 2.0;
+        summonPieceAt(piece, cellX(fileIndex(sq)) + CELL / 2.0, cellZ(rankIndex(sq)) + CELL / 2.0,
+                SQ_TAG_PREFIX + sq.toString().toLowerCase(Locale.ROOT));
+    }
+
+    /** sqTag == null : pièce de cimetière (décor, non cliquable). */
+    private void summonPieceAt(Piece piece, double centerX, double centerZ, String sqTag) {
         double floor = y0 + 1;
 
         boolean white = piece.getPieceSide() == Side.WHITE;
         String main = white ? "minecraft:white_concrete" : "minecraft:black_concrete";
         String trim = white ? "minecraft:light_gray_concrete" : "minecraft:gray_concrete";
         double dir = white ? 1 : -1; // les Blancs regardent le nord (-Z), les Noirs le sud
-        String sqTag = SQ_TAG_PREFIX + sq.toString().toLowerCase(Locale.ROOT);
-        String tags = "Tags:[\"" + TAG + "\",\"" + sqTag + "\"]";
+        String tags = sqTag != null
+                ? "Tags:[\"" + TAG + "\",\"" + sqTag + "\"]"
+                : "Tags:[\"" + TAG + "\",\"fpschess_grave\"]";
 
         for (Part part : parts(piece.getPieceType())) {
             String block = switch (part.kind()) {
@@ -362,6 +436,8 @@ public class BoardRenderer {
                     centerX, floor + part.y(), centerZ, nbt));
         }
 
+        if (sqTag == null) return; // pièce de cimetière : pas de zone cliquable
+
         // Zone cliquable invisible autour de la pièce
         run(String.format(Locale.ROOT,
                 "summon minecraft:interaction %.3f %.3f %.3f {%s,width:1.8f,height:%.1ff,response:1b}",
@@ -373,7 +449,7 @@ public class BoardRenderer {
     public static final int ARENA_SIZE = 37;   // côté de l'arène (impair : il y a un centre)
     public static final int ARENA_HEIGHT = 11; // hauteur de la salle
 
-    public int arenaX() { return x0 + 8 * CELL + 8; }
+    public int arenaX() { return x0 + 8 * CELL + 14; } // plus loin, pour laisser la place aux cimetières
 
     /** Spawn 0 = côté ouest (regarde l'est), spawn 1 = côté est (regarde l'ouest). {x, y, z, yaw} */
     public double[] arenaSpawn(int index) {
@@ -480,6 +556,6 @@ public class BoardRenderer {
         run("kill @e[tag=fpschess_label]");
         fill(arenaX(), y0, z0, arenaX() + ARENA_SIZE - 1, y0 + ARENA_HEIGHT, z0 + ARENA_SIZE - 1, "minecraft:air");
         int size = 8 * CELL;
-        fill(x0 - 2, y0 + 1, z0 - 2, x0 + size + 1, y0 + 6, z0 + size + 1, "minecraft:air");
+        fill(x0 - 9, y0 + 1, z0 - 2, x0 + size + 8, y0 + 6, z0 + size + 1, "minecraft:air");
     }
 }
