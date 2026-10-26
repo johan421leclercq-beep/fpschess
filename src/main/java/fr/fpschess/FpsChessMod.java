@@ -6,6 +6,7 @@ import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import net.fabricmc.fabric.api.event.player.AttackBlockCallback;
 import net.fabricmc.fabric.api.event.player.UseBlockCallback;
 import net.fabricmc.fabric.api.event.player.UseEntityCallback;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
@@ -34,6 +35,7 @@ public class FpsChessMod implements ModInitializer {
     private static final ChessGame GAME = new ChessGame();
     private static BoardRenderer renderer = null; // null tant que /fpschess board n'a pas été lancé
     private static ClickHandler handler = null;
+    private static boolean protection = true; // empêche de casser ou construire sur le plateau et l'arène
 
     private static boolean isOp(ServerCommandSource src) {
         return src.hasPermissionLevel(2);
@@ -69,20 +71,31 @@ public class FpsChessMod implements ModInitializer {
     public void onInitialize() {
         GAME.reset();
 
-        // Clic droit sur le sol d'une case
+        // Clic droit sur le sol d'une case (et protection contre la construction)
         UseBlockCallback.EVENT.register((player, world, hand, hit) -> {
-            if (world.isClient() || hand != Hand.MAIN_HAND || renderer == null || handler == null) {
-                return ActionResult.PASS;
-            }
-            if (!(player instanceof ServerPlayerEntity sp) || world != renderer.world()) {
+            if (world.isClient() || renderer == null || world != renderer.world()) {
                 return ActionResult.PASS;
             }
             Square sq = renderer.squareAt(hit.getBlockPos());
-            if (sq == null) {
-                return ActionResult.PASS;
+            if (sq != null) {
+                if (hand == Hand.MAIN_HAND && handler != null && player instanceof ServerPlayerEntity sp) {
+                    handler.onClick(sp, sq);
+                }
+                return ActionResult.SUCCESS; // jamais de bloc posé sur le plateau
             }
-            handler.onClick(sp, sq);
-            return ActionResult.SUCCESS;
+            if (protection && (renderer.isProtected(hit.getBlockPos())
+                    || renderer.isProtected(hit.getBlockPos().offset(hit.getSide())))) {
+                return ActionResult.FAIL;
+            }
+            return ActionResult.PASS;
+        });
+
+        // Interdit de casser le plateau et l'arène
+        AttackBlockCallback.EVENT.register((player, world, hand, pos, direction) -> {
+            if (protection && renderer != null && world == renderer.world() && renderer.isProtected(pos)) {
+                return ActionResult.FAIL;
+            }
+            return ActionResult.PASS;
         });
 
         // Clic droit directement sur une pièce
@@ -184,6 +197,33 @@ public class FpsChessMod implements ModInitializer {
                     return 1;
                 }))
 
+                // /fpschess resign : abandonner la partie (ouvert à tous)
+                .then(CommandManager.literal("resign").executes(ctx -> {
+                    if (handler == null) {
+                        ctx.getSource().sendError(Text.literal("Aucune partie en cours."));
+                        return 0;
+                    }
+                    String err = handler.resign(ctx.getSource().getPlayerOrThrow());
+                    if (err != null) {
+                        ctx.getSource().sendError(Text.literal(err));
+                        return 0;
+                    }
+                    return 1;
+                }))
+
+                // /fpschess protection on|off
+                .then(CommandManager.literal("protection").requires(FpsChessMod::isOp)
+                    .then(CommandManager.literal("on").executes(ctx -> {
+                        protection = true;
+                        ctx.getSource().sendFeedback(() -> Text.literal("Protection du plateau et de l'arène : activée."), false);
+                        return 1;
+                    }))
+                    .then(CommandManager.literal("off").executes(ctx -> {
+                        protection = false;
+                        ctx.getSource().sendFeedback(() -> Text.literal("Protection du plateau et de l'arène : désactivée."), false);
+                        return 1;
+                    })))
+
                 .then(CommandManager.literal("clear").requires(FpsChessMod::isOp).executes(ctx -> {
                     if (duelBusy(ctx.getSource())) return 0;
                     if (renderer != null) {
@@ -199,7 +239,7 @@ public class FpsChessMod implements ModInitializer {
                     if (duelBusy(ctx.getSource())) return 0;
                     GAME.reset();
                     if (renderer != null) {
-                        handler.reset();
+                        handler.newGame();
                         renderer.renderPieces(GAME.board());
                     }
                     ctx.getSource().sendFeedback(() -> Text.literal("Nouvelle partie."), false);

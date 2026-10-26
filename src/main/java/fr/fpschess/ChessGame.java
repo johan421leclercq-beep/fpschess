@@ -23,7 +23,8 @@ import java.util.Locale;
 public class ChessGame {
 
     private final Board board = new Board();
-    private Side forcedWinner = null; // victoire décidée par un duel (roi battu)
+    private Side forcedWinner = null; // victoire décidée hors échecs classiques (roi battu en duel, abandon)
+    private String forcedReason = "";
 
     public Board board() {
         return board;
@@ -112,7 +113,12 @@ public class ChessGame {
 
     /** Un roi a perdu son duel : la partie est terminée. */
     public void forceWin(Side winner) {
+        forceWin(winner, "Le roi est tombé en duel !");
+    }
+
+    public void forceWin(Side winner, String reason) {
         forcedWinner = winner;
+        forcedReason = reason;
     }
 
     /** Après le retrait d'une pièce, supprime les droits de roque devenus impossibles. */
@@ -146,7 +152,7 @@ public class ChessGame {
 
     public String statusText() {
         if (forcedWinner != null) {
-            return "Le roi est tombé en duel ! Victoire des " + (forcedWinner == Side.WHITE ? "Blancs" : "Noirs") + ".";
+            return forcedReason + " Victoire des " + (forcedWinner == Side.WHITE ? "Blancs" : "Noirs") + ".";
         }
         if (board.isMated()) {
             Side winner = board.getSideToMove().flip();

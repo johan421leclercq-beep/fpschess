@@ -93,8 +93,73 @@ public class BoardRenderer {
 
     public void buildBoard() {
         int size = 8 * CELL;
-        fill(x0, y0 + 1, z0, x0 + size - 1, y0 + 6, z0 + size - 1, "minecraft:air");
+        // Dégage l'espace, puis pose le cadre (2 blocs de large) autour du plateau
+        fill(x0 - 2, y0 + 1, z0 - 2, x0 + size + 1, y0 + 6, z0 + size + 1, "minecraft:air");
+        fill(x0 - 2, y0, z0 - 2, x0 + size + 1, y0, z0 + size + 1, "minecraft:polished_blackstone_bricks");
+        fill(x0 - 1, y0, z0 - 1, x0 + size, y0, z0 + size, "minecraft:stripped_dark_oak_log hollow");
+        // Poteaux d'angle avec lanterne
+        int[] xs = {x0 - 2, x0 + size + 1};
+        int[] zs = {z0 - 2, z0 + size + 1};
+        for (int cx : xs) {
+            for (int cz : zs) {
+                fill(cx, y0 + 1, cz, cx, y0 + 2, cz, "minecraft:stripped_dark_oak_log[axis=y]");
+                set(cx, y0 + 3, cz, "minecraft:lantern");
+            }
+        }
         drawFloor(Map.of());
+        buildLabels();
+    }
+
+    /** Lettres a..h et chiffres 1..8 sur les quatre côtés du cadre. */
+    private void buildLabels() {
+        int size = 8 * CELL;
+        for (int f = 0; f < 8; f++) {
+            String letter = String.valueOf((char) ('a' + f));
+            double x = cellX(f) + CELL / 2.0;
+            label(x, z0 + size + 1.0, letter);
+            label(x, z0 - 1.0, letter);
+        }
+        for (int r = 0; r < 8; r++) {
+            String number = String.valueOf(r + 1);
+            double z = cellZ(r) + CELL / 2.0;
+            label(x0 - 1.0, z, number);
+            label(x0 + size + 1.0, z, number);
+        }
+    }
+
+    private void label(double x, double z, String text) {
+        run(String.format(Locale.ROOT,
+                "summon minecraft:text_display %.2f %.2f %.2f {Tags:[\"fpschess_label\"],"
+              + "text:'{\"text\":\"%s\",\"color\":\"gold\",\"bold\":true}',billboard:\"center\",background:0,"
+              + "transformation:{left_rotation:[0f,0f,0f,1f],right_rotation:[0f,0f,0f,1f],"
+              + "translation:[0f,0f,0f],scale:[3f,3f,3f]}}",
+                x, y0 + 1.4, z, text));
+    }
+
+    // ---------- Protection ----------
+
+    /** Vrai si le bloc fait partie du plateau (cadre compris) ou de l'arène. */
+    public boolean isProtected(BlockPos pos) {
+        int x = pos.getX(), y = pos.getY(), z = pos.getZ();
+        int size = 8 * CELL;
+        boolean inBoard = x >= x0 - 2 && x <= x0 + size + 1 && z >= z0 - 2 && z <= z0 + size + 1
+                && y >= y0 && y <= y0 + 8;
+        int ax = arenaX();
+        boolean inArena = x >= ax && x <= ax + ARENA_SIZE - 1 && z >= z0 && z <= z0 + ARENA_SIZE - 1
+                && y >= y0 && y <= y0 + ARENA_HEIGHT;
+        return inBoard || inArena;
+    }
+
+    // ---------- Effets ----------
+
+    /** Son et particules sur une case : coup normal ou prise. */
+    public void effect(Square sq, boolean capture) {
+        double x = cellX(fileIndex(sq)) + CELL / 2.0;
+        double z = cellZ(rankIndex(sq)) + CELL / 2.0;
+        run(String.format(Locale.ROOT, "playsound %s block @a %.1f %.1f %.1f 2 1",
+                capture ? "minecraft:block.anvil.land" : "minecraft:block.stone.place", x, y0 + 1.5, z));
+        run(String.format(Locale.ROOT, "particle minecraft:%s %.1f %.1f %.1f 0.8 0.5 0.8 0.02 %d",
+                capture ? "explosion" : "poof", x, y0 + 1.2, z, capture ? 3 : 12));
     }
 
     /** Dessine le sol. 'overrides' permet de colorer certaines cases (sélection, coups possibles). */
@@ -412,8 +477,9 @@ public class BoardRenderer {
     public void removeAll() {
         clearPieces();
         run("kill @e[tag=fpschess_dummy]");
+        run("kill @e[tag=fpschess_label]");
         fill(arenaX(), y0, z0, arenaX() + ARENA_SIZE - 1, y0 + ARENA_HEIGHT, z0 + ARENA_SIZE - 1, "minecraft:air");
         int size = 8 * CELL;
-        fill(x0, y0 + 1, z0, x0 + size - 1, y0 + 6, z0 + size - 1, "minecraft:air");
+        fill(x0 - 2, y0 + 1, z0 - 2, x0 + size + 1, y0 + 6, z0 + size + 1, "minecraft:air");
     }
 }

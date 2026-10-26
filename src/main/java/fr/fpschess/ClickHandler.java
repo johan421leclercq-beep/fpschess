@@ -27,10 +27,14 @@ public class ClickHandler {
     private static final String SELECTED = "minecraft:yellow_concrete";
     private static final String MOVE = "minecraft:lime_concrete";
     private static final String CAPTURE = "minecraft:red_concrete";
+    private static final String LAST = "minecraft:light_blue_concrete"; // dernier coup
+    private static final String CHECK = "minecraft:orange_concrete";     // roi en échec
 
     private final ChessGame game;
     private final BoardRenderer renderer;
     private Square selected = null;
+    private Square lastFrom = null;
+    private Square lastTo = null;
 
     private Mode mode = Mode.NONE; // il faut choisir solo ou ami avant de jouer
     private UUID owner = null;     // en mode solo : le seul joueur autorisé
@@ -76,7 +80,58 @@ public class ClickHandler {
     /** Annule la sélection et remet le sol normal. */
     public void reset() {
         selected = null;
-        renderer.drawFloor(Map.of());
+        redrawFloor();
+    }
+
+    /** Nouvelle partie : on oublie aussi le dernier coup. */
+    public void newGame() {
+        lastFrom = null;
+        lastTo = null;
+        reset();
+    }
+
+    /** Couleurs permanentes du sol : dernier coup et roi en échec. */
+    private Map<Square, String> baseColors() {
+        Map<Square, String> m = new HashMap<>();
+        if (lastFrom != null && lastTo != null) {
+            m.put(lastFrom, LAST);
+            m.put(lastTo, LAST);
+        }
+        try {
+            if (game.board().isKingAttacked()) {
+                m.put(game.board().getKingSquare(game.sideToMove()), CHECK);
+            }
+        } catch (Exception ignored) {
+            // position inhabituelle : on n'affiche simplement pas l'échec
+        }
+        return m;
+    }
+
+    private void redrawFloor() {
+        renderer.drawFloor(baseColors());
+    }
+
+    /** Abandon. Renvoie un message d'erreur, ou null si tout est bon. */
+    public String resign(ServerPlayerEntity player) {
+        if (DuelManager.isActive()) return "Un duel est en cours.";
+        if (game.isOver()) return "La partie est déjà terminée.";
+        Side loser;
+        if (mode == Mode.FRIEND) {
+            if (player.getUuid().equals(white)) loser = Side.WHITE;
+            else if (player.getUuid().equals(black)) loser = Side.BLACK;
+            else return "Tu ne joues pas cette partie.";
+        } else if (mode == Mode.SOLO) {
+            if (!player.getUuid().equals(owner)) return "Seul " + ownerName + " peut abandonner.";
+            loser = game.sideToMove();
+        } else {
+            return "Aucune partie en cours.";
+        }
+        game.forceWin(loser.flip(), "Abandon des " + (loser == Side.WHITE ? "Blancs" : "Noirs") + ".");
+        selected = null;
+        redrawFloor();
+        MinecraftServer server = player.getServer();
+        if (server != null) broadcast(server, game.statusText());
+        return null;
     }
 
     public void onClick(ServerPlayerEntity player, Square sq) {
@@ -141,8 +196,11 @@ public class ClickHandler {
         if (r.capture() == null) {
             game.applyMove(r.move());
             selected = null;
-            renderer.drawFloor(Map.of());
+            lastFrom = r.move().getFrom();
+            lastTo = r.move().getTo();
+            redrawFloor();
             renderer.renderPieces(game.board());
+            renderer.effect(r.move().getTo(), false);
             broadcast(server, r.move() + " " + game.statusText());
             return;
         }
@@ -160,7 +218,7 @@ public class ClickHandler {
             }
         }
         selected = null;
-        renderer.drawFloor(Map.of());
+        redrawFloor();
         broadcast(server, "PRISE ! " + Kits.pieceName(c.attacker().getPieceType()) + " attaque "
                 + Kits.pieceName(c.defender().getPieceType()) + " en " + c.capturedSquare() + " : duel !");
         DuelManager.start(server, renderer, c, player, defender, attackerWon -> afterDuel(server, move, c, attackerWon));
@@ -170,9 +228,13 @@ public class ClickHandler {
         String msg;
         if (attackerWon) {
             game.applyMove(move);
+            lastFrom = move.getFrom();
+            lastTo = move.getTo();
             msg = Kits.pieceName(c.attacker().getPieceType()) + " gagne le duel et prend la case "
                     + c.capturedSquare() + ".";
         } else {
+            lastFrom = null;
+            lastTo = null;
             if (c.attacker().getPieceType() == PieceType.KING) {
                 game.forceWin(c.attacker().getPieceSide().flip());
             } else {
@@ -181,12 +243,14 @@ public class ClickHandler {
             msg = Kits.pieceName(c.attacker().getPieceType()) + " perd le duel et est retiré du plateau.";
         }
         renderer.renderPieces(game.board());
+        renderer.effect(c.capturedSquare(), true);
+        redrawFloor();
         broadcast(server, msg + " " + game.statusText());
     }
 
     private void select(Square sq) {
         selected = sq;
-        Map<Square, String> colors = new HashMap<>();
+        Map<Square, String> colors = baseColors();
         colors.put(sq, SELECTED);
         for (String m : game.legalMovesFrom(sq)) {
             Square dest = Square.fromValue(m.substring(2, 4).toUpperCase(Locale.ROOT));
