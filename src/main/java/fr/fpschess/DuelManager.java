@@ -1,6 +1,7 @@
 package fr.fpschess;
 
 import com.github.bhlangonijr.chesslib.PieceType;
+import com.github.bhlangonijr.chesslib.Side;
 import com.github.bhlangonijr.chesslib.Square;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.damage.DamageSource;
@@ -70,8 +71,9 @@ public final class DuelManager {
         Square defSq = c.capturedSquare();
         r.hidePiece(atkSq);
         r.hidePiece(defSq);
-        double[] atkSpawn = r.squareSpawn(atkSq, defSq);
-        double[] defSpawn = r.squareSpawn(defSq, atkSq);
+        Side atkSide = c.attacker().getPieceSide();
+        double[] atkSpawn = r.campSpawn(atkSide);        // chaque camp, entre la dame et le roi
+        double[] defSpawn = r.campSpawn(atkSide.flip());
         r.clearDrops();
         Duel d = new Duel();
         d.renderer = r;
@@ -96,7 +98,7 @@ public final class DuelManager {
         FpsChessMod.LOGGER.info("Duel : attaquant {} ({}), défenseur {} ({})",
                 attacker.getName().getString(), Kits.pieceName(atkType),
                 defender == null ? "zombie" : defender.getName().getString(), Kits.pieceName(defType));
-        announce(d, atkType, defType);
+        announce(server, d, atkType, defType);
     }
 
     private static void save(Duel d, ServerPlayerEntity p) {
@@ -149,16 +151,14 @@ public final class DuelManager {
         Kits.apply(r, d.dummy.toString(), type, null);
     }
 
-    /** Chaque joueur voit son rôle et la pièce qu'il incarne. */
-    private static void announce(Duel d, PieceType atk, PieceType def) {
+    /** Chaque joueur voit son rôle et la pièce qu'il incarne, en titre. */
+    private static void announce(MinecraftServer server, Duel d, PieceType atk, PieceType def) {
         for (UUID id : d.saved.keySet()) {
             boolean isAttacker = id.equals(d.attacker);
             String sub = isAttacker
                     ? "Tu attaques avec : " + Kits.pieceName(atk) + " (contre " + Kits.pieceName(def) + ")"
                     : "Tu défends avec : " + Kits.pieceName(def) + " (contre " + Kits.pieceName(atk) + ")";
-            String sel = "@a[name=" + d.names.get(id) + "]";
-            d.renderer.run("title " + sel + " subtitle {\"text\":\"" + sub + "\",\"color\":\"gray\"}");
-            d.renderer.run("title " + sel + " title {\"text\":\"DUEL\",\"color\":\"red\",\"bold\":true}");
+            Titles.show(server, "@a[name=" + d.names.get(id) + "]", "DUEL", sub, "red");
         }
     }
 

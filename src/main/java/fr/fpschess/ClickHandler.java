@@ -135,7 +135,7 @@ public class ClickHandler {
         selected = null;
         redrawFloor();
         MinecraftServer server = player.getServer();
-        if (server != null) broadcast(server, game.statusText());
+        if (server != null) showState(server, 0);
         return null;
     }
 
@@ -252,7 +252,8 @@ public class ClickHandler {
             redrawFloor();
             renderer.renderPieces(game.board());
             renderer.effect(r.move().getTo(), false);
-            broadcast(server, r.move() + " " + game.statusText());
+            broadcast(server, r.move() + (game.isOver() ? "" : ". Trait aux " + turnName() + "."));
+            showState(server, 0);
             return;
         }
 
@@ -270,19 +271,21 @@ public class ClickHandler {
         }
         selected = null;
         redrawFloor();
-        broadcast(server, "PRISE ! " + Kits.pieceName(c.attacker().getPieceType()) + " attaque "
-                + Kits.pieceName(c.defender().getPieceType()) + " en " + c.capturedSquare() + " : duel !");
+        Titles.show(server, "@a", "PRISE !",
+                Titles.cap(Kits.article(c.attacker().getPieceType())) + " attaque "
+                + Kits.article(c.defender().getPieceType()) + " en " + c.capturedSquare(), "red");
         DuelManager.start(server, renderer, c, player, defender, attackerWon -> afterDuel(server, move, c, attackerWon));
     }
 
     private void afterDuel(MinecraftServer server, Move move, CaptureInfo c, boolean attackerWon) {
-        String msg;
+        String title;
+        String subtitle;
         if (attackerWon) {
             game.applyMove(move);
             lastFrom = move.getFrom();
             lastTo = move.getTo();
-            msg = Kits.pieceName(c.attacker().getPieceType()) + " gagne le duel et prend la case "
-                    + c.capturedSquare() + ".";
+            title = Titles.cap(Kits.article(c.attacker().getPieceType())) + " gagne le duel !";
+            subtitle = "Pièce capturée : " + Kits.pieceName(c.defender().getPieceType()) + " en " + c.capturedSquare();
         } else {
             lastFrom = null;
             lastTo = null;
@@ -291,12 +294,52 @@ public class ClickHandler {
             } else {
                 game.removeLoserAttacker(c);
             }
-            msg = Kits.pieceName(c.attacker().getPieceType()) + " perd le duel et est retiré du plateau.";
+            title = Titles.cap(Kits.article(c.defender().getPieceType())) + " gagne le duel !";
+            subtitle = "Pièce éliminée : " + Kits.pieceName(c.attacker().getPieceType());
         }
         renderer.renderPieces(game.board());
         renderer.effect(c.capturedSquare(), true);
         redrawFloor();
-        broadcast(server, msg + " " + game.statusText());
+        Titles.show(server, "@a", title, subtitle, "gold");
+        showState(server, 100); // échec, mat... : annoncé juste après le résultat du duel
+    }
+
+    /** Annonce en titre : échec, mat, pat, nulle, abandon ou roi tombé. delay = attente en ticks. */
+    private void showState(MinecraftServer server, int delay) {
+        String title = null;
+        String subtitle = "";
+        String color = "red";
+        Side forced = game.forcedWinner();
+        if (forced != null) {
+            title = game.forcedReason();
+            subtitle = "Victoire des " + (forced == Side.WHITE ? "Blancs" : "Noirs");
+            color = "gold";
+        } else if (game.isMate()) {
+            title = "ÉCHEC ET MAT !";
+            subtitle = "Victoire des " + (game.sideToMove() == Side.WHITE ? "Noirs" : "Blancs");
+            color = "gold";
+        } else if (game.isStalemate()) {
+            title = "PAT";
+            subtitle = "Partie nulle";
+            color = "gray";
+        } else if (game.isDrawn()) {
+            title = "PARTIE NULLE";
+            subtitle = "Matériel insuffisant, répétition ou règle des 50 coups";
+            color = "gray";
+        } else if (game.inCheck()) {
+            title = "ÉCHEC !";
+            subtitle = "Les " + turnName() + " sont en échec";
+            color = "yellow";
+        }
+        if (title == null) return;
+        final String t = title;
+        final String st = subtitle;
+        final String col = color;
+        if (delay <= 0) {
+            Titles.show(server, "@a", t, st, col);
+        } else {
+            Titles.later(delay, () -> Titles.show(server, "@a", t, st, col));
+        }
     }
 
     private void select(Square sq) {

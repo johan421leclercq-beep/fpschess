@@ -81,6 +81,19 @@ public final class Kits {
         };
     }
 
+    /** "la dame", "le pion"... (en minuscules, pour les phrases). */
+    public static String article(PieceType type) {
+        return switch (type) {
+            case KING -> "le roi";
+            case QUEEN -> "la dame";
+            case ROOK -> "la tour";
+            case BISHOP -> "le fou";
+            case KNIGHT -> "le cavalier";
+            case PAWN -> "le pion";
+            default -> "la pièce";
+        };
+    }
+
     /**
      * Équipe une cible (joueur ou mob) via des commandes vanilla.
      * sel = UUID de l'entité. player = null pour un mob (le zombie) : il reçoit armure + arme, et la vie en plus s'il y a lieu.

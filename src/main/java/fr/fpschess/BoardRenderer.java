@@ -114,6 +114,17 @@ public class BoardRenderer {
         return new double[]{x, y0 + 1, z, yaw};
     }
 
+    /**
+     * Camp d'un joueur pendant un duel : sur sa rangée de départ, entre la dame (colonne d)
+     * et le roi (colonne e), tourné vers l'adversaire. {x, y, z, yaw}
+     */
+    public double[] campSpawn(Side side) {
+        boolean white = side == Side.WHITE;
+        double x = x0 + 4 * CELL; // frontière entre les cases d et e
+        double z = cellZ(white ? 0 : 7) + CELL / 2.0;
+        return new double[]{x, y0 + 1, z, white ? 180 : 0};
+    }
+
     /** Vrai si la position est sur le plateau (ou juste à côté) : sert à garder les duellistes dedans. */
     public boolean isInsideField(double x, double z) {
         int size = 8 * CELL;

@@ -155,6 +155,26 @@ public class ChessGame {
         return result;
     }
 
+    public Side forcedWinner() { return forcedWinner; }
+
+    public String forcedReason() { return forcedReason; }
+
+    public boolean isMate() { return forcedWinner == null && board.isMated(); }
+
+    public boolean isStalemate() { return forcedWinner == null && board.isStaleMate(); }
+
+    public boolean isDrawn() {
+        return forcedWinner == null && !board.isMated() && !board.isStaleMate() && board.isDraw();
+    }
+
+    public boolean inCheck() {
+        try {
+            return board.isKingAttacked();
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     public boolean isOver() {
         return forcedWinner != null || board.isMated() || board.isStaleMate() || board.isDraw();
     }

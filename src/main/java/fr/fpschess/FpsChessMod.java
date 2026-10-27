@@ -118,6 +118,7 @@ public class FpsChessMod implements ModInitializer {
 
         // Duels
         ServerTickEvents.END_SERVER_TICK.register(DuelManager::tick);
+        ServerTickEvents.END_SERVER_TICK.register(Titles::tick);
         ServerLivingEntityEvents.ALLOW_DEATH.register((entity, source, amount) -> DuelManager.allowDeath(entity));
         ServerLivingEntityEvents.ALLOW_DAMAGE.register((entity, source, amount) -> DuelManager.allowDamage(entity, source));
         ServerPlayConnectionEvents.DISCONNECT.register((netHandler, server) -> DuelManager.onDisconnect(netHandler.player));
