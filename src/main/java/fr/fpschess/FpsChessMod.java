@@ -141,7 +141,6 @@ public class FpsChessMod implements ModInitializer {
 
                     renderer = new BoardRenderer(src.getServer(), world, x0, y0, z0);
                     renderer.buildBoard();
-                    renderer.buildArena();
                     renderer.renderPieces(GAME.board());
                     handler = new ClickHandler(GAME, renderer);
                     src.sendFeedback(FpsChessMod::modeMenu, false);

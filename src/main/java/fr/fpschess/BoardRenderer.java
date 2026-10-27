@@ -19,17 +19,21 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * Construit le plateau, les pièces et l'arène dans le monde, uniquement avec des commandes vanilla
- * (fill, setblock, summon, kill) : c'est le plus stable d'une version à l'autre.
+ * Construit le plateau et les pièces dans le monde avec de vrais blocs, uniquement via des commandes
+ * vanilla (fill, setblock, summon, kill).
  *
  * Repère : colonne a..h le long de +X, rangée 1..8 le long de -Z (les Blancs au sud).
- * Chaque case fait CELL x CELL blocs. Le sol du plateau est à la hauteur y0.
+ * Chaque case fait CELL x CELL blocs, le sol du plateau est à la hauteur y0.
+ * Les pièces tiennent dans la zone locale x,z = 1..5 de chaque case (le bord 0 reste libre pour la lumière).
+ * Le duel se joue directement sur le plateau.
  */
 public class BoardRenderer {
 
-    public static final int CELL = 3;
-    public static final String TAG = "fpschess_piece";
+    public static final int CELL = 7;
     public static final String SQ_TAG_PREFIX = "fpschess_sq_";
+
+    /** Hauteur maximale d'une pièce (le roi fait 16 blocs). */
+    private static final int PIECE_TOP = 17;
 
     private static final String LIGHT = "minecraft:birch_planks";
     private static final String DARK = "minecraft:dark_oak_planks";
@@ -38,7 +42,7 @@ public class BoardRenderer {
     private final ServerWorld world;
     private final int x0, y0, z0;
 
-    /** Ce qui est actuellement affiché, pour ne redessiner que les pièces qui changent. */
+    /** Ce qui est actuellement construit, pour ne refaire que les pièces qui changent. */
     private final Map<Square, Piece> shown = new HashMap<>();
 
     public BoardRenderer(MinecraftServer server, ServerWorld world, int x0, int y0, int z0) {
@@ -58,6 +62,14 @@ public class BoardRenderer {
         run(String.format(Locale.ROOT, "fill %d %d %d %d %d %d %s", x1, y1, z1, x2, y2, z2, block));
     }
 
+    /** Comme fill, mais découpe en tranches : une commande fill est limitée à 32 768 blocs. */
+    private void fillBig(int x1, int y1, int z1, int x2, int y2, int z2, String block) {
+        int slice = Math.max(1, 30000 / ((y2 - y1 + 1) * (z2 - z1 + 1)));
+        for (int x = x1; x <= x2; x += slice) {
+            fill(x, y1, z1, Math.min(x + slice - 1, x2), y2, z2, block);
+        }
+    }
+
     private void set(int x, int y, int z, String block) {
         run(String.format(Locale.ROOT, "setblock %d %d %d %s", x, y, z, block));
     }
@@ -74,44 +86,75 @@ public class BoardRenderer {
         return world;
     }
 
+    public int floorY() {
+        return y0;
+    }
+
     public String dimension() {
         return world.getRegistryKey().getValue().toString();
     }
 
-    /** Renvoie la case d'échecs correspondant à un bloc du sol, ou null si hors plateau. */
+    /** Case d'échecs correspondant à un bloc du plateau ou d'une pièce, ou null si hors plateau. */
     public Square squareAt(BlockPos pos) {
-        if (pos.getY() != y0) return null;
+        if (pos.getY() < y0 || pos.getY() > y0 + PIECE_TOP) return null;
         int dx = pos.getX() - x0;
         int dz = pos.getZ() - z0;
         int size = 8 * CELL;
         if (dx < 0 || dz < 0 || dx >= size || dz >= size) return null;
-        int f = dx / CELL;
-        int r = 7 - (dz / CELL);
-        return Square.encode(Rank.values()[r], File.values()[f]);
+        return Square.encode(Rank.values()[7 - (dz / CELL)], File.values()[dx / CELL]);
+    }
+
+    /** Point d'apparition au centre d'une case, tourné vers une autre case. {x, y, z, yaw} */
+    public double[] squareSpawn(Square sq, Square toward) {
+        double x = cellX(fileIndex(sq)) + CELL / 2.0;
+        double z = cellZ(rankIndex(sq)) + CELL / 2.0;
+        int dx = cellX(fileIndex(toward)) - cellX(fileIndex(sq));
+        int dz = cellZ(rankIndex(toward)) - cellZ(rankIndex(sq));
+        double yaw = (dx == 0 && dz == 0) ? 0 : Math.toDegrees(Math.atan2(-dx, dz));
+        return new double[]{x, y0 + 1, z, yaw};
+    }
+
+    /** Vrai si la position est sur le plateau (ou juste à côté) : sert à garder les duellistes dedans. */
+    public boolean isInsideField(double x, double z) {
+        int size = 8 * CELL;
+        return x >= x0 - 1 && x <= x0 + size + 1 && z >= z0 - 1 && z <= z0 + size + 1;
     }
 
     // ---------- Plateau ----------
 
+    /** Origine (coin nord-ouest) d'une case de cimetière. West = pièces blanches prises. */
+    private int graveOriginX(boolean west, int col) {
+        int size = 8 * CELL;
+        return west ? x0 - 10 - CELL * col : x0 + size + 3 + CELL * col;
+    }
+
     public void buildBoard() {
         int size = 8 * CELL;
-        // Dégage l'espace, puis pose le cadre (2 blocs de large) autour du plateau
-        fill(x0 - 9, y0 + 1, z0 - 2, x0 + size + 8, y0 + 6, z0 + size + 1, "minecraft:air");
-        // Cimetières : une plateforme de chaque côté du cadre (Blancs prises à l'ouest, Noirs à l'est)
-        fill(x0 - 9, y0, z0, x0 - 3, y0, z0 + size - 1, "minecraft:polished_deepslate");
-        fill(x0 + size + 2, y0, z0, x0 + size + 8, y0, z0 + size - 1, "minecraft:polished_deepslate");
+
+        // Dégage tout l'espace (plateau + cadre + cimetières)
+        fillBig(x0 - 17, y0 + 1, z0 - 2, x0 + size + 16, y0 + PIECE_TOP + 3, z0 + size + 1, "minecraft:air");
+
+        // Plateformes des cimetières, de chaque côté du cadre
+        fill(x0 - 17, y0, z0, x0 - 3, y0, z0 + size - 1, "minecraft:polished_deepslate");
+        fill(x0 + size + 2, y0, z0, x0 + size + 16, y0, z0 + size - 1, "minecraft:polished_deepslate");
+
+        // Cadre de 2 blocs autour du plateau
         fill(x0 - 2, y0, z0 - 2, x0 + size + 1, y0, z0 + size + 1, "minecraft:polished_blackstone_bricks");
         fill(x0 - 1, y0, z0 - 1, x0 + size, y0, z0 + size, "minecraft:stripped_dark_oak_log hollow");
+
         // Poteaux d'angle avec lanterne
         int[] xs = {x0 - 2, x0 + size + 1};
         int[] zs = {z0 - 2, z0 + size + 1};
         for (int cx : xs) {
             for (int cz : zs) {
-                fill(cx, y0 + 1, cz, cx, y0 + 2, cz, "minecraft:stripped_dark_oak_log[axis=y]");
-                set(cx, y0 + 3, cz, "minecraft:lantern");
+                fill(cx, y0 + 1, cz, cx, y0 + 3, cz, "minecraft:stripped_dark_oak_log[axis=y]");
+                set(cx, y0 + 4, cz, "minecraft:lantern");
             }
         }
+
         drawFloor(Map.of());
         buildLabels();
+        buildLights();
     }
 
     /** Lettres a..h et chiffres 1..8 sur les quatre côtés du cadre. */
@@ -136,8 +179,182 @@ public class BoardRenderer {
                 "summon minecraft:text_display %.2f %.2f %.2f {Tags:[\"fpschess_label\"],"
               + "text:'{\"text\":\"%s\",\"color\":\"gold\",\"bold\":true}',billboard:\"center\",background:0,"
               + "transformation:{left_rotation:[0f,0f,0f,1f],right_rotation:[0f,0f,0f,1f],"
-              + "translation:[0f,0f,0f],scale:[3f,3f,3f]}}",
-                x, y0 + 1.4, z, text));
+              + "translation:[0f,0f,0f],scale:[5f,5f,5f]}}",
+                x, y0 + 1.8, z, text));
+    }
+
+    /**
+     * Blocs de lumière invisibles au coin de chaque case (là où il n'y a jamais de pièce) :
+     * aucun endroit à 0 de luminosité, donc aucun monstre ne peut apparaître sur le plateau.
+     */
+    private void buildLights() {
+        for (int f = 0; f < 8; f++) {
+            for (int r = 0; r < 8; r++) {
+                set(cellX(f), y0 + 1, cellZ(r), "minecraft:light[level=15]");
+            }
+        }
+        for (int row = 0; row < 8; row++) {
+            for (int col = 0; col < 2; col++) {
+                set(graveOriginX(true, col), y0 + 1, cellZ(row), "minecraft:light[level=15]");
+                set(graveOriginX(false, col), y0 + 1, cellZ(row), "minecraft:light[level=15]");
+            }
+        }
+    }
+
+    /** Dessine le sol. 'overrides' permet de colorer certaines cases (sélection, coups possibles). */
+    public void drawFloor(Map<Square, String> overrides) {
+        for (int f = 0; f < 8; f++) {
+            for (int r = 0; r < 8; r++) {
+                Square sq = Square.encode(Rank.values()[r], File.values()[f]);
+                String block = overrides.getOrDefault(sq, ((f + r) % 2 == 0) ? DARK : LIGHT); // a1 est sombre
+                int x = cellX(f);
+                int z = cellZ(r);
+                fill(x, y0, z, x + CELL - 1, y0, z + CELL - 1, block);
+            }
+        }
+    }
+
+    // ---------- Pièces en blocs ----------
+
+    private static final int MAIN = 0, TRIM = 1, GOLD = 2;
+
+    /** Un pavé de blocs en coordonnées locales de la case (x, z de 0 à 6, y = hauteur au-dessus du sol). */
+    private record Box(int x1, int y1, int z1, int x2, int y2, int z2, int kind) {}
+
+    private static Box p(int x1, int y1, int z1, int x2, int y2, int z2) { return new Box(x1, y1, z1, x2, y2, z2, MAIN); }
+    private static Box t(int x1, int y1, int z1, int x2, int y2, int z2) { return new Box(x1, y1, z1, x2, y2, z2, TRIM); }
+    private static Box g(int x1, int y1, int z1, int x2, int y2, int z2) { return new Box(x1, y1, z1, x2, y2, z2, GOLD); }
+
+    /** Dessin de chaque pièce. Un pavé posé plus tard remplace ce qui est dessous. Devant = z faible (nord). */
+    private static List<Box> boxes(PieceType type) {
+        return switch (type) {
+
+            case PAWN -> List.of(
+                t(1, 1, 1, 5, 1, 5),
+                p(2, 2, 2, 4, 3, 4),
+                p(3, 4, 3, 3, 4, 3),
+                t(2, 5, 2, 4, 5, 4),
+                p(2, 6, 2, 4, 8, 4),
+                p(3, 9, 3, 3, 9, 3));
+
+            case ROOK -> List.of(
+                t(1, 1, 1, 5, 1, 5),
+                p(1, 2, 1, 5, 2, 5),
+                p(2, 3, 2, 4, 7, 4),
+                t(1, 4, 1, 5, 4, 5),
+                p(1, 8, 1, 5, 9, 5),
+                // créneaux : 4 coins + 4 milieux
+                p(1, 10, 1, 1, 10, 1), p(5, 10, 1, 5, 10, 1),
+                p(1, 10, 5, 1, 10, 5), p(5, 10, 5, 5, 10, 5),
+                p(3, 10, 1, 3, 10, 1), p(3, 10, 5, 3, 10, 5),
+                p(1, 10, 3, 1, 10, 3), p(5, 10, 3, 5, 10, 3));
+
+            case KNIGHT -> List.of(
+                t(1, 1, 1, 5, 1, 5),
+                p(2, 2, 3, 4, 4, 5),      // poitrail
+                p(2, 5, 3, 4, 6, 4),      // cou
+                p(2, 7, 2, 4, 8, 4),      // tête
+                p(3, 6, 1, 3, 7, 2),      // museau
+                t(3, 6, 1, 3, 6, 1),      // naseaux
+                t(3, 6, 4, 3, 8, 4),      // crinière
+                p(2, 9, 3, 2, 9, 3),      // oreilles
+                p(4, 9, 3, 4, 9, 3),
+                g(2, 8, 2, 2, 8, 2),      // yeux
+                g(4, 8, 2, 4, 8, 2));
+
+            case BISHOP -> List.of(
+                t(1, 1, 1, 5, 1, 5),
+                p(2, 2, 2, 4, 3, 4),
+                t(2, 4, 2, 4, 4, 4),
+                p(2, 5, 2, 4, 7, 4),
+                t(1, 8, 1, 5, 8, 5),
+                p(2, 9, 2, 4, 10, 4),     // mitre
+                t(3, 9, 2, 3, 10, 2),     // fente de la mitre
+                p(3, 11, 3, 3, 11, 3),
+                g(3, 12, 3, 3, 12, 3));
+
+            case QUEEN -> List.of(
+                t(1, 1, 1, 5, 1, 5),
+                p(1, 2, 1, 5, 2, 5),
+                p(2, 3, 2, 4, 8, 4),
+                t(1, 5, 1, 5, 5, 5),
+                t(1, 9, 1, 5, 9, 5),
+                p(1, 10, 1, 5, 10, 5),
+                // couronne : 4 pointes d'angle + 4 milieux
+                p(1, 11, 1, 1, 12, 1), p(5, 11, 1, 5, 12, 1),
+                p(1, 11, 5, 1, 12, 5), p(5, 11, 5, 5, 12, 5),
+                p(3, 11, 1, 3, 11, 1), p(3, 11, 5, 3, 11, 5),
+                p(1, 11, 3, 1, 11, 3), p(5, 11, 3, 5, 11, 3),
+                g(1, 13, 1, 1, 13, 1), g(5, 13, 1, 5, 13, 1),
+                g(1, 13, 5, 1, 13, 5), g(5, 13, 5, 5, 13, 5),
+                g(3, 11, 3, 3, 11, 3));
+
+            case KING -> List.of(
+                t(1, 1, 1, 5, 1, 5),
+                p(1, 2, 1, 5, 2, 5),
+                p(2, 3, 2, 4, 8, 4),
+                t(1, 5, 1, 5, 5, 5),
+                t(1, 9, 1, 5, 9, 5),
+                g(1, 10, 1, 5, 10, 5),    // bandeau doré
+                p(2, 11, 2, 4, 12, 4),    // couronne
+                g(3, 13, 3, 3, 16, 3),    // croix
+                g(2, 15, 3, 4, 15, 3));
+
+            default -> List.of();
+        };
+    }
+
+    /** Efface tout ce qui se trouve dans la zone des pièces d'une case (la lumière du bord reste). */
+    private void clearCell(int ox, int oz) {
+        fill(ox + 1, y0 + 1, oz + 1, ox + 5, y0 + PIECE_TOP, oz + 5, "minecraft:air");
+    }
+
+    private void buildPiece(Piece piece, int ox, int oz) {
+        boolean white = piece.getPieceSide() == Side.WHITE;
+        String main = white ? "minecraft:white_concrete" : "minecraft:black_concrete";
+        String trim = white ? "minecraft:light_gray_concrete" : "minecraft:gray_concrete";
+        for (Box b : boxes(piece.getPieceType())) {
+            String block = switch (b.kind()) {
+                case GOLD -> "minecraft:gold_block";
+                case TRIM -> trim;
+                default -> main;
+            };
+            int x1 = b.x1(), x2 = b.x2(), z1 = b.z1(), z2 = b.z2();
+            if (!white) { // les Noirs sont tournés à 180° : ils regardent vers le sud
+                x1 = 6 - b.x2();
+                x2 = 6 - b.x1();
+                z1 = 6 - b.z2();
+                z2 = 6 - b.z1();
+            }
+            fill(ox + x1, y0 + b.y1(), oz + z1, ox + x2, y0 + b.y2(), oz + z2, block);
+        }
+    }
+
+    /** Efface la statue d'une case (pendant un duel, les deux pièces sont remplacées par les joueurs). */
+    public void hidePiece(Square sq) {
+        clearCell(cellX(fileIndex(sq)), cellZ(rankIndex(sq)));
+        shown.remove(sq);
+    }
+
+    /** Met l'affichage à jour : seules les cases qui ont changé sont reconstruites. */
+    public void renderPieces(Board board) {
+        for (Square sq : Square.values()) {
+            if (sq == Square.NONE) continue;
+            Piece now = board.getPiece(sq);
+            Piece before = shown.getOrDefault(sq, Piece.NONE);
+            if (now == before) continue;
+
+            int ox = cellX(fileIndex(sq));
+            int oz = cellZ(rankIndex(sq));
+            clearCell(ox, oz);
+            if (now != Piece.NONE) {
+                buildPiece(now, ox, oz);
+                shown.put(sq, now);
+            } else {
+                shown.remove(sq);
+            }
+        }
+        updateGraveyard(board);
     }
 
     // ---------- Cimetières ----------
@@ -180,41 +397,37 @@ public class BoardRenderer {
         return out;
     }
 
-    /** Redessine les cimetières seulement si les pièces prises ont changé. */
+    /** Reconstruit les cimetières seulement si les pièces prises ont changé. */
     private void updateGraveyard(Board board) {
         List<Piece> whiteLost = captured(board, WHITE_SET);
         List<Piece> blackLost = captured(board, BLACK_SET);
         String signature = whiteLost + "|" + blackLost;
         if (signature.equals(graveSignature)) return;
         graveSignature = signature;
-        run("kill @e[tag=fpschess_grave]");
+        for (int row = 0; row < 8; row++) {
+            for (int col = 0; col < 2; col++) {
+                clearCell(graveOriginX(true, col), cellZ(row));
+                clearCell(graveOriginX(false, col), cellZ(row));
+            }
+        }
         placeGraves(whiteLost, true);
         placeGraves(blackLost, false);
     }
 
     private void placeGraves(List<Piece> pieces, boolean west) {
-        int size = 8 * CELL;
         for (int k = 0; k < pieces.size() && k < 16; k++) {
-            int col = k / 8;
-            int row = k % 8;
-            double cx = west ? x0 - 4.5 - 3.0 * col : x0 + size + 4.5 + 3.0 * col;
-            double cz = cellZ(row) + CELL / 2.0;
-            summonPieceAt(pieces.get(k), cx, cz, null);
+            buildPiece(pieces.get(k), graveOriginX(west, k / 8), cellZ(k % 8));
         }
     }
 
     // ---------- Protection ----------
 
-    /** Vrai si le bloc fait partie du plateau (cadre compris) ou de l'arène. */
+    /** Vrai si le bloc fait partie du plateau, de son cadre ou des cimetières. */
     public boolean isProtected(BlockPos pos) {
-        int x = pos.getX(), y = pos.getY(), z = pos.getZ();
         int size = 8 * CELL;
-        boolean inBoard = x >= x0 - 9 && x <= x0 + size + 8 && z >= z0 - 2 && z <= z0 + size + 1
-                && y >= y0 && y <= y0 + 8;
-        int ax = arenaX();
-        boolean inArena = x >= ax && x <= ax + ARENA_SIZE - 1 && z >= z0 && z <= z0 + ARENA_SIZE - 1
-                && y >= y0 && y <= y0 + ARENA_HEIGHT;
-        return inBoard || inArena;
+        return pos.getX() >= x0 - 17 && pos.getX() <= x0 + size + 16
+                && pos.getZ() >= z0 - 2 && pos.getZ() <= z0 + size + 1
+                && pos.getY() >= y0 && pos.getY() <= y0 + PIECE_TOP + 2;
     }
 
     // ---------- Effets ----------
@@ -223,339 +436,29 @@ public class BoardRenderer {
     public void effect(Square sq, boolean capture) {
         double x = cellX(fileIndex(sq)) + CELL / 2.0;
         double z = cellZ(rankIndex(sq)) + CELL / 2.0;
-        run(String.format(Locale.ROOT, "playsound %s block @a %.1f %.1f %.1f 2 1",
-                capture ? "minecraft:block.anvil.land" : "minecraft:block.stone.place", x, y0 + 1.5, z));
-        run(String.format(Locale.ROOT, "particle minecraft:%s %.1f %.1f %.1f 0.8 0.5 0.8 0.02 %d",
-                capture ? "explosion" : "poof", x, y0 + 1.2, z, capture ? 3 : 12));
+        run(String.format(Locale.ROOT, "playsound %s block @a %.1f %.1f %.1f 4 1",
+                capture ? "minecraft:block.anvil.land" : "minecraft:block.stone.place", x, y0 + 2.0, z));
+        run(String.format(Locale.ROOT, "particle minecraft:%s %.1f %.1f %.1f 2 1 2 0.02 %d",
+                capture ? "explosion" : "poof", x, y0 + 1.5, z, capture ? 5 : 25));
     }
 
-    /** Dessine le sol. 'overrides' permet de colorer certaines cases (sélection, coups possibles). */
-    public void drawFloor(Map<Square, String> overrides) {
-        for (int f = 0; f < 8; f++) {
-            for (int r = 0; r < 8; r++) {
-                Square sq = Square.encode(Rank.values()[r], File.values()[f]);
-                String block = overrides.getOrDefault(sq, ((f + r) % 2 == 0) ? DARK : LIGHT); // a1 est sombre
-                int x = cellX(f);
-                int z = cellZ(r);
-                fill(x, y0, z, x + CELL - 1, y0, z + CELL - 1, block);
-            }
-        }
-    }
-
-    // ---------- Pièces ----------
-
-    /** Un morceau de statue : taille, centre (cx, cz) par rapport au centre de la case, hauteur y depuis le sol. */
-    private record Part(double sx, double sy, double sz, double cx, double y, double cz, int kind) {}
-
-    private static final int MAIN = 0, TRIM = 1, GOLD = 2;
-
-    private static Part p(double sx, double sy, double sz, double cx, double y, double cz) {
-        return new Part(sx, sy, sz, cx, y, cz, MAIN);
-    }
-
-    private static Part t(double sx, double sy, double sz, double cx, double y, double cz) {
-        return new Part(sx, sy, sz, cx, y, cz, TRIM);
-    }
-
-    private static Part g(double sx, double sy, double sz, double cx, double y, double cz) {
-        return new Part(sx, sy, sz, cx, y, cz, GOLD);
-    }
-
-    /** Dessin de chaque pièce. cz négatif = vers l'avant (le museau du cavalier). */
-    private static List<Part> parts(PieceType type) {
-        return switch (type) {
-
-            case PAWN -> List.of(
-                t(1.6, 0.15, 1.6, 0, 0, 0),
-                p(1.4, 0.15, 1.4, 0, 0.15, 0),
-                p(0.55, 0.5, 0.55, 0, 0.3, 0),
-                t(0.9, 0.12, 0.9, 0, 0.8, 0),
-                p(0.4, 0.3, 0.4, 0, 0.92, 0),
-                t(0.75, 0.1, 0.75, 0, 1.22, 0),
-                p(0.6, 0.15, 0.6, 0, 1.32, 0),
-                p(0.85, 0.5, 0.85, 0, 1.47, 0),
-                p(0.6, 0.15, 0.6, 0, 1.97, 0));
-
-            case ROOK -> List.of(
-                t(2.0, 0.15, 2.0, 0, 0, 0),
-                p(1.8, 0.15, 1.8, 0, 0.15, 0),
-                p(1.3, 0.9, 1.3, 0, 0.3, 0),
-                t(1.5, 0.12, 1.5, 0, 1.2, 0),
-                p(1.1, 0.7, 1.1, 0, 1.32, 0),
-                t(1.7, 0.18, 1.7, 0, 2.02, 0),
-                p(1.7, 0.25, 1.7, 0, 2.2, 0),
-                // créneaux : 4 coins + 4 milieux
-                p(0.4, 0.35, 0.4, 0.65, 2.45, 0.65),
-                p(0.4, 0.35, 0.4, -0.65, 2.45, 0.65),
-                p(0.4, 0.35, 0.4, 0.65, 2.45, -0.65),
-                p(0.4, 0.35, 0.4, -0.65, 2.45, -0.65),
-                p(0.4, 0.35, 0.4, 0, 2.45, 0.65),
-                p(0.4, 0.35, 0.4, 0, 2.45, -0.65),
-                p(0.4, 0.35, 0.4, 0.65, 2.45, 0),
-                p(0.4, 0.35, 0.4, -0.65, 2.45, 0));
-
-            case KNIGHT -> List.of(
-                t(1.9, 0.15, 1.9, 0, 0, 0),
-                p(1.7, 0.15, 1.7, 0, 0.15, 0),
-                p(1.1, 0.7, 1.1, 0, 0.3, 0.15),
-                p(0.95, 0.6, 0.95, 0, 1.0, 0.1),
-                p(0.85, 0.5, 0.85, 0, 1.6, -0.05),   // cou
-                p(0.8, 0.5, 0.8, 0, 2.1, -0.2),
-                p(0.8, 0.5, 0.9, 0, 2.6, -0.3),      // tête
-                p(0.55, 0.4, 0.6, 0, 2.6, -0.95),    // museau
-                t(0.6, 0.2, 0.2, 0, 2.6, -1.28),     // naseaux
-                t(0.3, 0.5, 0.25, 0, 1.6, 0.4),      // crinière
-                t(0.3, 0.5, 0.25, 0, 2.1, 0.3),
-                t(0.3, 0.5, 0.25, 0, 2.6, 0.2),
-                p(0.2, 0.3, 0.2, 0.25, 3.1, -0.1),   // oreilles
-                p(0.2, 0.3, 0.2, -0.25, 3.1, -0.1),
-                g(0.12, 0.12, 0.12, 0.42, 2.9, -0.55), // yeux
-                g(0.12, 0.12, 0.12, -0.42, 2.9, -0.55));
-
-            case BISHOP -> List.of(
-                t(1.9, 0.15, 1.9, 0, 0, 0),
-                p(1.6, 0.15, 1.6, 0, 0.15, 0),
-                p(1.1, 0.5, 1.1, 0, 0.3, 0),
-                t(1.3, 0.12, 1.3, 0, 0.8, 0),
-                p(0.75, 0.9, 0.75, 0, 0.92, 0),
-                t(1.15, 0.15, 1.15, 0, 1.82, 0),
-                p(0.7, 0.3, 0.7, 0, 1.97, 0),
-                p(0.85, 0.4, 0.85, 0, 2.27, 0),      // mitre
-                t(0.2, 0.5, 0.95, 0, 2.25, 0),       // fente de la mitre
-                p(0.6, 0.4, 0.6, 0, 2.67, 0),
-                p(0.35, 0.3, 0.35, 0, 3.07, 0),
-                g(0.28, 0.28, 0.28, 0, 3.37, 0));
-
-            case QUEEN -> List.of(
-                t(2.1, 0.15, 2.1, 0, 0, 0),
-                p(1.9, 0.15, 1.9, 0, 0.15, 0),
-                p(1.4, 0.5, 1.4, 0, 0.3, 0),
-                t(1.6, 0.12, 1.6, 0, 0.8, 0),
-                p(1.0, 0.9, 1.0, 0, 0.92, 0),
-                t(1.25, 0.1, 1.25, 0, 1.82, 0),
-                p(0.8, 0.9, 0.8, 0, 1.92, 0),
-                t(1.4, 0.15, 1.4, 0, 2.82, 0),
-                p(1.0, 0.35, 1.0, 0, 2.97, 0),
-                // couronne : 4 pointes dorées
-                p(0.3, 0.45, 0.3, 0.5, 3.32, 0.5),
-                p(0.3, 0.45, 0.3, -0.5, 3.32, 0.5),
-                p(0.3, 0.45, 0.3, 0.5, 3.32, -0.5),
-                p(0.3, 0.45, 0.3, -0.5, 3.32, -0.5),
-                g(0.2, 0.2, 0.2, 0.5, 3.77, 0.5),
-                g(0.2, 0.2, 0.2, -0.5, 3.77, 0.5),
-                g(0.2, 0.2, 0.2, 0.5, 3.77, -0.5),
-                g(0.2, 0.2, 0.2, -0.5, 3.77, -0.5),
-                g(0.4, 0.4, 0.4, 0, 3.32, 0));
-
-            case KING -> List.of(
-                t(2.1, 0.15, 2.1, 0, 0, 0),
-                p(1.9, 0.15, 1.9, 0, 0.15, 0),
-                p(1.5, 0.5, 1.5, 0, 0.3, 0),
-                t(1.7, 0.12, 1.7, 0, 0.8, 0),
-                p(1.1, 0.9, 1.1, 0, 0.92, 0),
-                t(1.35, 0.1, 1.35, 0, 1.82, 0),
-                p(0.9, 0.9, 0.9, 0, 1.92, 0),
-                t(1.5, 0.15, 1.5, 0, 2.82, 0),
-                p(1.1, 0.45, 1.1, 0, 2.97, 0),
-                g(1.2, 0.12, 1.2, 0, 3.12, 0),       // bandeau doré de la couronne
-                p(0.8, 0.3, 0.8, 0, 3.42, 0),
-                g(0.3, 0.9, 0.3, 0, 3.72, 0),        // croix
-                g(0.9, 0.3, 0.3, 0, 4.05, 0));
-
-            default -> List.of();
-        };
-    }
-
-    private static double hitboxHeight(PieceType type) {
-        return switch (type) {
-            case PAWN -> 2.3;
-            case KING -> 4.7;
-            case QUEEN -> 3.9;
-            default -> 3.3;
-        };
-    }
-
-    /** Efface toutes les pièces. */
-    public void clearPieces() {
-        run("kill @e[tag=" + TAG + "]");
-        shown.clear();
-        graveSignature = "";
-    }
-
-    /** Met l'affichage à jour : seules les cases qui ont changé sont redessinées. */
-    public void renderPieces(Board board) {
-        for (Square sq : Square.values()) {
-            if (sq == Square.NONE) continue;
-            Piece now = board.getPiece(sq);
-            Piece before = shown.getOrDefault(sq, Piece.NONE);
-            if (now == before) continue;
-
-            if (before != Piece.NONE) {
-                run("kill @e[tag=" + SQ_TAG_PREFIX + sq.toString().toLowerCase(Locale.ROOT) + "]");
-            }
-            if (now != Piece.NONE) {
-                summonPiece(now, sq);
-                shown.put(sq, now);
-            } else {
-                shown.remove(sq);
-            }
-        }
-        updateGraveyard(board);
-    }
-
-    private void summonPiece(Piece piece, Square sq) {
-        summonPieceAt(piece, cellX(fileIndex(sq)) + CELL / 2.0, cellZ(rankIndex(sq)) + CELL / 2.0,
-                SQ_TAG_PREFIX + sq.toString().toLowerCase(Locale.ROOT));
-    }
-
-    /** sqTag == null : pièce de cimetière (décor, non cliquable). */
-    private void summonPieceAt(Piece piece, double centerX, double centerZ, String sqTag) {
-        double floor = y0 + 1;
-
-        boolean white = piece.getPieceSide() == Side.WHITE;
-        String main = white ? "minecraft:white_concrete" : "minecraft:black_concrete";
-        String trim = white ? "minecraft:light_gray_concrete" : "minecraft:gray_concrete";
-        double dir = white ? 1 : -1; // les Blancs regardent le nord (-Z), les Noirs le sud
-        String tags = sqTag != null
-                ? "Tags:[\"" + TAG + "\",\"" + sqTag + "\"]"
-                : "Tags:[\"" + TAG + "\",\"fpschess_grave\"]";
-
-        for (Part part : parts(piece.getPieceType())) {
-            String block = switch (part.kind()) {
-                case GOLD -> "minecraft:gold_block";
-                case TRIM -> trim;
-                default -> main;
-            };
-            double tx = part.cx() * dir - part.sx() / 2;
-            double tz = part.cz() * dir - part.sz() / 2;
-            String nbt = String.format(Locale.ROOT,
-                    "{%s,block_state:{Name:\"%s\"},transformation:{left_rotation:[0f,0f,0f,1f],"
-                  + "right_rotation:[0f,0f,0f,1f],translation:[%.3ff,0f,%.3ff],scale:[%.3ff,%.3ff,%.3ff]}}",
-                    tags, block, tx, tz, part.sx(), part.sy(), part.sz());
-            run(String.format(Locale.ROOT, "summon minecraft:block_display %.3f %.3f %.3f %s",
-                    centerX, floor + part.y(), centerZ, nbt));
-        }
-
-        if (sqTag == null) return; // pièce de cimetière : pas de zone cliquable
-
-        // Zone cliquable invisible autour de la pièce
-        run(String.format(Locale.ROOT,
-                "summon minecraft:interaction %.3f %.3f %.3f {%s,width:1.8f,height:%.1ff,response:1b}",
-                centerX, floor, centerZ, tags, hitboxHeight(piece.getPieceType())));
-    }
-
-    // ---------- Arène de duel (à l'est du plateau) ----------
-
-    public static final int ARENA_SIZE = 37;   // côté de l'arène (impair : il y a un centre)
-    public static final int ARENA_HEIGHT = 11; // hauteur de la salle
-
-    public int arenaX() { return x0 + 8 * CELL + 14; } // plus loin, pour laisser la place aux cimetières
-
-    /** Spawn 0 = côté ouest (regarde l'est), spawn 1 = côté est (regarde l'ouest). {x, y, z, yaw} */
-    public double[] arenaSpawn(int index) {
-        double z = z0 + ARENA_SIZE / 2 + 0.5;
-        return index == 0
-                ? new double[]{arenaX() + 4.5, y0 + 1, z, -90}
-                : new double[]{arenaX() + ARENA_SIZE - 4.5, y0 + 1, z, 90};
-    }
-
-    /** Matériau du sol d'une case de l'arène (coordonnées locales). */
-    private static String arenaFloor(int x, int z) {
-        int c = ARENA_SIZE / 2;
-        int s = ARENA_SIZE;
-        if (x >= 3 && x <= 5 && z >= c - 1 && z <= c + 1) return "minecraft:red_concrete";            // départ attaquant
-        if (x >= s - 6 && x <= s - 4 && z >= c - 1 && z <= c + 1) return "minecraft:blue_concrete";   // départ défenseur
-        double d = Math.hypot(x - c, z - c);
-        if (d <= 3.5) return "minecraft:chiseled_polished_blackstone";
-        if (d >= 6.5 && d <= 7.8) return "minecraft:red_terracotta";
-        if (d >= 11.5 && d <= 12.6) return "minecraft:red_nether_bricks";
-        return ((x + z) % 2 == 0) ? "minecraft:deepslate_tiles" : "minecraft:polished_deepslate";
-    }
-
-    /** Colisée de pierre sombre : sol en damier avec anneaux, colonnes, poutres, lanternes, bannières. */
-    public void buildArena() {
-        int ax = arenaX(), y = y0, z = z0, s = ARENA_SIZE, e = s - 1, h = ARENA_HEIGHT, c = s / 2;
-
-        // 1. Coque fermée (murs + plafond), intérieur vidé
-        fill(ax, y, z, ax + e, y + h, z + e, "minecraft:stone_bricks hollow");
-
-        // 2. Sol
-        fill(ax, y, z, ax + e, y, z + e, "minecraft:deepslate_tiles");
-        for (int x = 0; x < s; x++) {
-            for (int dz = 0; dz < s; dz++) {
-                String block = arenaFloor(x, dz);
-                if (!block.equals("minecraft:deepslate_tiles")) {
-                    set(ax + x, y, z + dz, block);
-                }
-            }
-        }
-
-        // 3. Murs : soubassement, frise, plafond en briques noires
-        fill(ax, y + 1, z, ax + e, y + 1, z + e, "minecraft:polished_blackstone_bricks hollow");
-        fill(ax, y + h - 2, z, ax + e, y + h - 2, z + e, "minecraft:chiseled_stone_bricks hollow");
-        fill(ax, y + h, z, ax + e, y + h, z + e, "minecraft:polished_blackstone_bricks");
-
-        // 4. Colonnes en bois le long des murs
-        int[] cols = {6, 12, 18, 24, 30};
-        for (int col : cols) {
-            fill(ax + 1, y + 1, z + col, ax + 1, y + h - 2, z + col, "minecraft:stripped_dark_oak_log[axis=y]");
-            fill(ax + e - 1, y + 1, z + col, ax + e - 1, y + h - 2, z + col, "minecraft:stripped_dark_oak_log[axis=y]");
-            fill(ax + col, y + 1, z + 1, ax + col, y + h - 2, z + 1, "minecraft:stripped_dark_oak_log[axis=y]");
-            fill(ax + col, y + 1, z + e - 1, ax + col, y + h - 2, z + e - 1, "minecraft:stripped_dark_oak_log[axis=y]");
-        }
-
-        // 5. Poutres au plafond et lanternes suspendues
-        for (int bz : new int[]{6, 18, 30}) {
-            fill(ax + 1, y + h - 1, z + bz, ax + e - 1, y + h - 1, z + bz, "minecraft:dark_oak_log[axis=x]");
-            for (int bx : new int[]{9, 18, 27}) {
-                set(ax + bx, y + h - 2, z + bz, "minecraft:lantern[hanging=true]");
-            }
-        }
-
-        // 6. Bannières : rouge côté attaquant (ouest), bleue côté défenseur (est)
-        for (int bz : new int[]{9, 15, 21, 27}) {
-            set(ax + 1, y + 5, z + bz, "minecraft:red_wall_banner[facing=east]");
-            set(ax + e - 1, y + 5, z + bz, "minecraft:blue_wall_banner[facing=west]");
-        }
-
-        // 7. Couvertures : colonnes en ruine {x, z, hauteur}
-        int[][] ruins = {{10, 8, 3}, {25, 8, 2}, {10, 27, 2}, {25, 27, 3}, {16, 12, 2}, {19, 24, 2}};
-        for (int[] r : ruins) {
-            String brick = r[2] == 3 ? "minecraft:mossy_stone_bricks" : "minecraft:cracked_stone_bricks";
-            fill(ax + r[0], y + 1, z + r[1], ax + r[0] + 1, y + r[2], z + r[1] + 1, brick);
-            fill(ax + r[0], y + r[2] + 1, z + r[1], ax + r[0] + 1, y + r[2] + 1, z + r[1] + 1,
-                    "minecraft:stone_brick_slab[type=bottom]");
-        }
-
-        // Estrade centrale en gradins
-        fill(ax + c - 2, y + 1, z + c - 2, ax + c + 2, y + 1, z + c + 2,
-                "minecraft:polished_blackstone_brick_slab[type=bottom]");
-        fill(ax + c - 1, y + 1, z + c - 1, ax + c + 1, y + 1, z + c + 1, "minecraft:polished_blackstone_bricks");
-        set(ax + c, y + 2, z + c, "minecraft:gold_block");
-
-        // 8. Lumière invisible en grille : aucun endroit à 0 de luminosité, aucun monstre ne peut apparaître
-        for (int lx = 2; lx < s; lx += 4) {
-            for (int lz = 2; lz < s; lz += 4) {
-                set(ax + lx, y + 5, z + lz, "minecraft:light[level=15]");
-            }
-        }
-    }
-
-    /** Supprime tout ce qui n'est pas un joueur dans l'arène (objets, orbes, monstres). */
-    public void clearArenaEntities() {
-        run(String.format(Locale.ROOT,
-                "kill @e[type=!minecraft:player,x=%d,y=%d,z=%d,dx=%d,dy=%d,dz=%d]",
-                arenaX(), y0, z0, ARENA_SIZE, ARENA_HEIGHT + 3, ARENA_SIZE));
+    /** Supprime les objets et orbes d'expérience tombés sur le plateau après un duel. */
+    public void clearDrops() {
+        int size = 8 * CELL;
+        run(String.format(Locale.ROOT, "kill @e[type=minecraft:item,x=%d,y=%d,z=%d,dx=%d,dy=%d,dz=%d]",
+                x0, y0, z0, size, PIECE_TOP + 5, size));
+        run(String.format(Locale.ROOT, "kill @e[type=minecraft:experience_orb,x=%d,y=%d,z=%d,dx=%d,dy=%d,dz=%d]",
+                x0, y0, z0, size, PIECE_TOP + 5, size));
     }
 
     // ---------- Nettoyage ----------
 
     public void removeAll() {
-        clearPieces();
         run("kill @e[tag=fpschess_dummy]");
         run("kill @e[tag=fpschess_label]");
-        fill(arenaX(), y0, z0, arenaX() + ARENA_SIZE - 1, y0 + ARENA_HEIGHT, z0 + ARENA_SIZE - 1, "minecraft:air");
+        shown.clear();
+        graveSignature = "";
         int size = 8 * CELL;
-        fill(x0 - 9, y0 + 1, z0 - 2, x0 + size + 8, y0 + 6, z0 + size + 1, "minecraft:air");
+        fillBig(x0 - 17, y0 + 1, z0 - 2, x0 + size + 16, y0 + PIECE_TOP + 3, z0 + size + 1, "minecraft:air");
     }
 }

@@ -1,6 +1,7 @@
 package fr.fpschess;
 
 import com.github.bhlangonijr.chesslib.PieceType;
+import com.github.bhlangonijr.chesslib.Square;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.item.ItemStack;
 import net.minecraft.server.MinecraftServer;
@@ -39,6 +40,7 @@ public final class DuelManager {
         BoardRenderer renderer;
         UUID attacker, defender, dummy; // defender == null -> zombie (dummy)
         Map<UUID, Saved> saved = new HashMap<>();
+        Map<UUID, double[]> spawns = new HashMap<>(); // point de départ de chaque joueur (pour le ramener sur le plateau)
         int ticks = 0;
         Boolean attackerWon = null;
         Consumer<Boolean> onFinish;
@@ -55,7 +57,14 @@ public final class DuelManager {
     public static void start(MinecraftServer server, BoardRenderer r, CaptureInfo c,
                              ServerPlayerEntity attacker, ServerPlayerEntity defender,
                              Consumer<Boolean> onFinish) {
-        r.clearArenaEntities(); // chasse les monstres éventuels avant le duel
+        // Le duel a lieu sur le plateau : les statues des deux pièces sont remplacées par les joueurs
+        Square atkSq = c.from();
+        Square defSq = c.capturedSquare();
+        r.hidePiece(atkSq);
+        r.hidePiece(defSq);
+        double[] atkSpawn = r.squareSpawn(atkSq, defSq);
+        double[] defSpawn = r.squareSpawn(defSq, atkSq);
+        r.clearDrops();
         Duel d = new Duel();
         d.renderer = r;
         d.attacker = attacker.getUuid();
@@ -67,12 +76,12 @@ public final class DuelManager {
         PieceType defType = c.defender().getPieceType();
 
         save(d, attacker);
-        prepare(d, attacker, atkType, 0);
+        prepare(d, attacker, atkType, atkSpawn);
         if (defender != null) {
             save(d, defender);
-            prepare(d, defender, defType, 1);
+            prepare(d, defender, defType, defSpawn);
         } else {
-            spawnDummy(d, defType);
+            spawnDummy(d, defType, defSpawn);
         }
         current = d;
 
@@ -99,7 +108,7 @@ public final class DuelManager {
         d.saved.put(p.getUuid(), s);
     }
 
-    private static void prepare(Duel d, ServerPlayerEntity p, PieceType type, int spawnIndex) {
+    private static void prepare(Duel d, ServerPlayerEntity p, PieceType type, double[] sp) {
         BoardRenderer r = d.renderer;
         String sel = p.getUuidAsString();
         p.getInventory().clear();
@@ -107,16 +116,15 @@ public final class DuelManager {
         p.setHealth(p.getMaxHealth());
         p.getHungerManager().setFoodLevel(20);
         p.changeGameMode(GameMode.ADVENTURE);
-        double[] sp = r.arenaSpawn(spawnIndex);
+        d.spawns.put(p.getUuid(), sp);
         r.run(String.format(Locale.ROOT, "execute in %s run tp %s %.2f %.2f %.2f %.1f 0",
                 r.dimension(), sel, sp[0], sp[1], sp[2], sp[3]));
         Kits.apply(r, sel, type, false);
         r.run("effect give " + sel + " minecraft:resistance 3 4 true"); // protection pendant la préparation
     }
 
-    private static void spawnDummy(Duel d, PieceType type) {
+    private static void spawnDummy(Duel d, PieceType type, double[] sp) {
         BoardRenderer r = d.renderer;
-        double[] sp = r.arenaSpawn(1);
         long msb = d.dummy.getMostSignificantBits();
         long lsb = d.dummy.getLeastSignificantBits();
         String uuidNbt = String.format(Locale.ROOT, "[I;%d,%d,%d,%d]",
@@ -151,6 +159,14 @@ public final class DuelManager {
         d.ticks++;
 
         if (d.attackerWon == null) {
+            for (UUID id : d.spawns.keySet()) {
+                ServerPlayerEntity p = server.getPlayerManager().getPlayer(id);
+                if (p != null && (!d.renderer.isInsideField(p.getX(), p.getZ()) || p.getY() < d.renderer.floorY() - 3)) {
+                    double[] sp = d.spawns.get(id);
+                    d.renderer.run(String.format(Locale.ROOT, "execute in %s run tp %s %.2f %.2f %.2f %.1f 0",
+                            d.renderer.dimension(), p.getUuidAsString(), sp[0], sp[1], sp[2], sp[3]));
+                }
+            }
             if (d.ticks == GRACE_TICKS && d.dummy != null) {
                 d.renderer.run("data modify entity " + d.dummy + " NoAI set value 0b");
             }
@@ -210,7 +226,7 @@ public final class DuelManager {
         if (d.dummy != null) {
             d.renderer.run("kill " + d.dummy);
         }
-        d.renderer.clearArenaEntities();
+        d.renderer.clearDrops();
         current = null;
         d.onFinish.accept(d.attackerWon);
     }
