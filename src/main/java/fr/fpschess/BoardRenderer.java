@@ -453,6 +453,13 @@ public class BoardRenderer {
                 capture ? "explosion" : "poof", x, y0 + 1.5, z, capture ? 5 : 25));
     }
 
+    /** Petit souffle à l'endroit visé avec la charge de sélection. */
+    public void aimEffect(double x, double y, double z) {
+        run(String.format(Locale.ROOT, "particle minecraft:cloud %.2f %.2f %.2f 0.3 0.3 0.3 0.05 12", x, y, z));
+        run(String.format(Locale.ROOT, "playsound minecraft:entity.wind_charge.wind_burst block @a %.1f %.1f %.1f 1 1.4",
+                x, y, z));
+    }
+
     /** Supprime les objets et orbes d'expérience tombés sur le plateau après un duel. */
     public void clearDrops() {
         int size = 8 * CELL;

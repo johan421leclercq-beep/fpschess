@@ -5,14 +5,18 @@ import com.github.bhlangonijr.chesslib.PieceType;
 import com.github.bhlangonijr.chesslib.Side;
 import com.github.bhlangonijr.chesslib.Square;
 import com.github.bhlangonijr.chesslib.move.Move;
+import net.minecraft.item.ItemStack;
+import net.minecraft.item.Items;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
 
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -48,6 +52,69 @@ public class ClickHandler {
     public ClickHandler(ChessGame game, BoardRenderer renderer) {
         this.game = game;
         this.renderer = renderer;
+    }
+
+    // ---------- Charge de sélection ----------
+
+    /** Nom de la charge de vent spéciale qui sert à viser les cases (pour la distinguer des charges du cavalier). */
+    public static final String TOOL_NAME = "Charge de sélection";
+
+    public static boolean isTool(ItemStack stack) {
+        return stack.isOf(Items.WIND_CHARGE) && stack.getName().getString().equals(TOOL_NAME);
+    }
+
+    private static boolean hasTool(ServerPlayerEntity p) {
+        for (int i = 0; i < p.getInventory().size(); i++) {
+            if (isTool(p.getInventory().getStack(i))) return true;
+        }
+        return false;
+    }
+
+    private static void takeTool(ServerPlayerEntity p) {
+        for (int i = 0; i < p.getInventory().size(); i++) {
+            if (isTool(p.getInventory().getStack(i))) {
+                p.getInventory().setStack(i, ItemStack.EMPTY);
+            }
+        }
+    }
+
+    private static void giveTool(MinecraftServer server, ServerPlayerEntity p) {
+        // /give n'accepte que des noms de joueurs (pas d'UUID) : on passe par le pseudo
+        String command = "give @a[name=" + p.getName().getString() + "] minecraft:wind_charge["
+                + "minecraft:custom_name='{\"text\":\"" + TOOL_NAME + "\",\"color\":\"gold\",\"italic\":false}'] 1";
+        server.getCommandManager().executeWithPrefix(server.getCommandSource().withSilent(), command);
+    }
+
+    /** Donne la charge au joueur dont c'est le tour et la retire à tous les autres. */
+    public void syncTools(MinecraftServer server) {
+        UUID holder = null;
+        if (!game.isOver() && !DuelManager.isActive()) {
+            if (mode == Mode.SOLO) holder = owner;
+            else if (mode == Mode.FRIEND) holder = game.sideToMove() == Side.WHITE ? white : black;
+        }
+        applyTools(server, holder);
+    }
+
+    /** Retire la charge à tout le monde. */
+    public void removeTools(MinecraftServer server) {
+        applyTools(server, null);
+    }
+
+    private void applyTools(MinecraftServer server, UUID holder) {
+        Set<UUID> everyone = new HashSet<>();
+        if (owner != null) everyone.add(owner);
+        if (white != null) everyone.add(white);
+        if (black != null) everyone.add(black);
+        for (UUID id : everyone) {
+            ServerPlayerEntity p = server.getPlayerManager().getPlayer(id);
+            if (p == null) continue;
+            boolean has = hasTool(p);
+            if (id.equals(holder)) {
+                if (!has) giveTool(server, p);
+            } else if (has) {
+                takeTool(p);
+            }
+        }
     }
 
     // ---------- Modes ----------
@@ -135,7 +202,10 @@ public class ClickHandler {
         selected = null;
         redrawFloor();
         MinecraftServer server = player.getServer();
-        if (server != null) showState(server, 0);
+        if (server != null) {
+            showState(server, 0);
+            syncTools(server);
+        }
         return null;
     }
 
@@ -254,6 +324,7 @@ public class ClickHandler {
             renderer.effect(r.move().getTo(), false);
             broadcast(server, r.move() + (game.isOver() ? "" : ". Trait aux " + turnName() + "."));
             showState(server, 0);
+            syncTools(server);
             return;
         }
 
@@ -302,6 +373,7 @@ public class ClickHandler {
         redrawFloor();
         Titles.show(server, "@a", title, subtitle, "gold");
         showState(server, 100); // échec, mat... : annoncé juste après le résultat du duel
+        syncTools(server);
     }
 
     /** Annonce en titre : échec, mat, pat, nulle, abandon ou roi tombé. delay = attente en ticks. */

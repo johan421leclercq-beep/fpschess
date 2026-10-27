@@ -9,7 +9,9 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.event.player.AttackBlockCallback;
 import net.fabricmc.fabric.api.event.player.UseBlockCallback;
 import net.fabricmc.fabric.api.event.player.UseEntityCallback;
+import net.fabricmc.fabric.api.event.player.UseItemCallback;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
+import net.minecraft.item.ItemStack;
 import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
@@ -20,6 +22,9 @@ import net.minecraft.text.Text;
 import net.minecraft.util.ActionResult;
 import net.minecraft.util.Formatting;
 import net.minecraft.util.Hand;
+import net.minecraft.util.TypedActionResult;
+import net.minecraft.util.hit.BlockHitResult;
+import net.minecraft.util.hit.HitResult;
 import net.minecraft.util.math.BlockPos;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -116,6 +121,30 @@ public class FpsChessMod implements ModInitializer {
             return ActionResult.PASS;
         });
 
+        // Charge de sélection : un clic droit avec elle vise la case regardée, à n'importe quelle distance
+        UseItemCallback.EVENT.register((player, world, hand) -> {
+            ItemStack stack = player.getStackInHand(hand);
+            if (!ClickHandler.isTool(stack)) {
+                return TypedActionResult.pass(stack);
+            }
+            if (!world.isClient() && player instanceof ServerPlayerEntity sp
+                    && renderer != null && handler != null && world == renderer.world()) {
+                HitResult hit = sp.raycast(150.0, 0.0F, false);
+                Square sq = null;
+                if (hit.getType() == HitResult.Type.BLOCK) {
+                    sq = renderer.squareAt(((BlockHitResult) hit).getBlockPos());
+                    renderer.aimEffect(hit.getPos().x, hit.getPos().y + 0.3, hit.getPos().z);
+                }
+                if (sq != null) {
+                    handler.onClick(sp, sq);
+                } else {
+                    sp.sendMessage(Text.literal("Vise une case du plateau avec la charge de sélection."), true);
+                }
+                sp.currentScreenHandler.syncState(); // la charge n'est jamais consommée par la visée
+            }
+            return TypedActionResult.success(stack); // on annule le vrai lancer : la charge reste dans l'inventaire
+        });
+
         // Duels
         ServerTickEvents.END_SERVER_TICK.register(DuelManager::tick);
         ServerTickEvents.END_SERVER_TICK.register(Titles::tick);
@@ -134,6 +163,7 @@ public class FpsChessMod implements ModInitializer {
                     ServerWorld world = src.getWorld();
                     BlockPos p = player.getBlockPos();
 
+                    if (handler != null) handler.removeTools(src.getServer());
                     if (renderer != null) renderer.removeAll();
 
                     int size = 8 * BoardRenderer.CELL;
@@ -157,7 +187,9 @@ public class FpsChessMod implements ModInitializer {
                             return 0;
                         }
                         if (duelBusy(ctx.getSource())) return 0;
+                        handler.removeTools(ctx.getSource().getServer());
                         handler.setSolo(ctx.getSource().getPlayerOrThrow());
+                        handler.syncTools(ctx.getSource().getServer());
                         ctx.getSource().sendFeedback(() -> Text.literal(
                             "Mode solo : tu joues les deux camps. Les duels se font contre un zombie."
                             + " (La difficulté ne doit pas être en pacifique : /difficulty normal)")
@@ -171,7 +203,9 @@ public class FpsChessMod implements ModInitializer {
                         }
                         if (duelBusy(ctx.getSource())) return 0;
                         ServerPlayerEntity me = ctx.getSource().getPlayerOrThrow();
+                        handler.removeTools(ctx.getSource().getServer());
                         handler.setFriend(me);
+                        handler.syncTools(ctx.getSource().getServer());
                         Text msg = Text.literal(me.getName().getString() + " joue les Blancs.  ")
                             .formatted(Formatting.AQUA)
                             .append(button("[Rejoindre en Noir]", "/fpschess join", Formatting.YELLOW,
@@ -192,6 +226,7 @@ public class FpsChessMod implements ModInitializer {
                         ctx.getSource().sendError(Text.literal(err));
                         return 0;
                     }
+                    handler.syncTools(ctx.getSource().getServer());
                     ctx.getSource().getServer().getPlayerManager().broadcast(
                         Text.literal(me.getName().getString() + " joue les Noirs. Que la partie commence !")
                             .formatted(Formatting.GREEN), false);
@@ -250,6 +285,7 @@ public class FpsChessMod implements ModInitializer {
                     if (renderer != null) {
                         renderer.removeAll();
                         renderer = null;
+                        handler.removeTools(ctx.getSource().getServer());
                         handler = null;
                     }
                     ctx.getSource().sendFeedback(() -> Text.literal("Plateau supprimé."), false);
@@ -261,6 +297,7 @@ public class FpsChessMod implements ModInitializer {
                     GAME.reset();
                     if (renderer != null) {
                         handler.newGame();
+                        handler.syncTools(ctx.getSource().getServer());
                         renderer.renderPieces(GAME.board());
                     }
                     ctx.getSource().sendFeedback(() -> Text.literal("Nouvelle partie."), false);
