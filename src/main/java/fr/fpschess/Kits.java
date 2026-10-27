@@ -9,33 +9,56 @@ public final class Kits {
 
     private Kits() {}
 
+    /**
+     * Un kit. gives = objets donnés tels quels ("objet quantité"). effects = "effet:niveau:secondes"
+     * (niveau 0 = niveau I). extraHealth = points de vie en plus (2 points = 1 cœur).
+     */
     private record Kit(String head, String chest, String legs, String feet,
-                       String weapon, String offhand, List<String> gives, List<String> effects) {}
+                       String weapon, String offhand, List<String> gives, List<String> effects,
+                       int extraHealth) {}
 
-    /** Armure complète dans un matériau. */
-    private static Kit full(String material, String weapon, String offhand, List<String> gives, List<String> effects) {
-        return new Kit("minecraft:" + material + "_helmet", "minecraft:" + material + "_chestplate",
-                "minecraft:" + material + "_leggings", "minecraft:" + material + "_boots",
-                "minecraft:" + weapon, offhand, gives, effects);
-    }
+    private static final String LOYALTY_TRIDENT =
+            "minecraft:trident[minecraft:enchantments={levels:{\"minecraft:loyalty\":3}}]";
 
     private static Kit kit(PieceType type) {
         return switch (type) {
-            case PAWN -> full("leather", "wooden_sword", null,
-                    List.of("minecraft:bread 2"), List.of());
-            case KNIGHT -> full("chainmail", "stone_sword", null,
-                    List.of("minecraft:bow 1", "minecraft:arrow 16"), List.of("speed:0"));
-            case BISHOP -> new Kit("minecraft:iron_helmet", "minecraft:iron_chestplate", null, null,
-                    "minecraft:iron_sword", null,
-                    List.of("minecraft:bow 1", "minecraft:arrow 16"), List.of("speed:0"));
-            case ROOK -> full("iron", "iron_sword", "minecraft:shield",
-                    List.of("minecraft:golden_apple 2"), List.of());
-            case QUEEN -> full("diamond", "diamond_sword", null,
-                    List.of("minecraft:bow 1", "minecraft:arrow 16", "minecraft:ender_pearl 2",
-                            "minecraft:golden_apple 2"), List.of());
-            case KING -> full("diamond", "diamond_sword", "minecraft:totem_of_undying",
-                    List.of("minecraft:golden_apple 3"), List.of("resistance:0"));
-            default -> full("leather", "wooden_sword", null, List.of(), List.of());
+
+            // Pion : cuir + épée en pierre
+            case PAWN -> new Kit("minecraft:leather_helmet", "minecraft:leather_chestplate",
+                    "minecraft:leather_leggings", "minecraft:leather_boots",
+                    "minecraft:stone_sword", null, List.of(), List.of(), 0);
+
+            // Fou : 4 perles d'Ender (sans dégâts de chute, voir DuelManager) + casque et plastron en mailles + épée en pierre
+            case BISHOP -> new Kit("minecraft:chainmail_helmet", "minecraft:chainmail_chestplate", null, null,
+                    "minecraft:stone_sword", null,
+                    List.of("minecraft:ender_pearl 4"), List.of(), 0);
+
+            // Cavalier : saut 2 pendant 1 min + 8 charges de vent + masse + casque et plastron en mailles
+            case KNIGHT -> new Kit("minecraft:chainmail_helmet", "minecraft:chainmail_chestplate", null, null,
+                    "minecraft:mace", null,
+                    List.of("minecraft:wind_charge 8"), List.of("jump_boost:1:60"), 0);
+
+            // Tour : trident Loyauté 3 + casque et jambières en fer + plastron en mailles + résistance 1
+            case ROOK -> new Kit("minecraft:iron_helmet", "minecraft:chainmail_chestplate",
+                    "minecraft:iron_leggings", null,
+                    LOYALTY_TRIDENT, null,
+                    List.of(), List.of("resistance:0:150"), 0);
+
+            // Dame : fer complet + épée en fer + 1 pomme dorée + bouclier + 5 cœurs en plus
+            case QUEEN -> new Kit("minecraft:iron_helmet", "minecraft:iron_chestplate",
+                    "minecraft:iron_leggings", "minecraft:iron_boots",
+                    "minecraft:iron_sword", "minecraft:shield",
+                    List.of("minecraft:golden_apple 1"), List.of(), 10);
+
+            // Roi : totem + 1 pomme dorée enchantée + mailles complètes + épée en pierre
+            case KING -> new Kit("minecraft:chainmail_helmet", "minecraft:chainmail_chestplate",
+                    "minecraft:chainmail_leggings", "minecraft:chainmail_boots",
+                    "minecraft:stone_sword", "minecraft:totem_of_undying",
+                    List.of("minecraft:enchanted_golden_apple 1"), List.of(), 0);
+
+            default -> new Kit("minecraft:leather_helmet", "minecraft:leather_chestplate",
+                    "minecraft:leather_leggings", "minecraft:leather_boots",
+                    "minecraft:wooden_sword", null, List.of(), List.of(), 0);
         };
     }
 
@@ -53,7 +76,7 @@ public final class Kits {
 
     /**
      * Équipe une cible (joueur ou mob) via des commandes vanilla.
-     * sel = UUID de l'entité. Un mob (dummy) reçoit seulement armure + arme.
+     * sel = UUID de l'entité. Un mob (dummy) reçoit armure + arme, et la vie en plus s'il y a lieu.
      */
     public static void apply(BoardRenderer r, String sel, PieceType type, boolean dummy) {
         Kit k = kit(type);
@@ -62,14 +85,26 @@ public final class Kits {
         slot(r, sel, "armor.legs", k.legs());
         slot(r, sel, "armor.feet", k.feet());
         slot(r, sel, "weapon.mainhand", k.weapon());
-        if (dummy) return;
+
+        int maxHealth = 20 + k.extraHealth();
+        if (dummy) {
+            if (k.extraHealth() > 0) {
+                r.run("attribute " + sel + " minecraft:generic.max_health base set " + maxHealth);
+                r.run("data modify entity " + sel + " Health set value " + maxHealth + "f");
+            }
+            return;
+        }
+
+        // Vie maximale (toujours définie explicitement pour repartir d'une base propre)
+        r.run("attribute " + sel + " minecraft:generic.max_health base set " + maxHealth);
+
         slot(r, sel, "weapon.offhand", k.offhand());
         for (String give : k.gives()) {
             r.run("give " + sel + " " + give);
         }
         for (String eff : k.effects()) {
-            String[] parts = eff.split(":");
-            r.run("effect give " + sel + " minecraft:" + parts[0] + " 150 " + parts[1] + " true");
+            String[] parts = eff.split(":"); // effet, niveau, durée en secondes
+            r.run("effect give " + sel + " minecraft:" + parts[0] + " " + parts[2] + " " + parts[1] + " true");
         }
     }
 

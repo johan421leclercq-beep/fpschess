@@ -3,6 +3,8 @@ package fr.fpschess;
 import com.github.bhlangonijr.chesslib.PieceType;
 import com.github.bhlangonijr.chesslib.Square;
 import net.minecraft.entity.LivingEntity;
+import net.minecraft.entity.damage.DamageSource;
+import net.minecraft.entity.damage.DamageTypes;
 import net.minecraft.item.ItemStack;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
@@ -40,6 +42,7 @@ public final class DuelManager {
         BoardRenderer renderer;
         UUID attacker, defender, dummy; // defender == null -> zombie (dummy)
         Map<UUID, Saved> saved = new HashMap<>();
+        Map<UUID, PieceType> types = new HashMap<>(); // pièce incarnée par chaque joueur
         Map<UUID, double[]> spawns = new HashMap<>(); // point de départ de chaque joueur (pour le ramener sur le plateau)
         int ticks = 0;
         Boolean attackerWon = null;
@@ -117,9 +120,11 @@ public final class DuelManager {
         p.getHungerManager().setFoodLevel(20);
         p.changeGameMode(GameMode.ADVENTURE);
         d.spawns.put(p.getUuid(), sp);
+        d.types.put(p.getUuid(), type);
         r.run(String.format(Locale.ROOT, "execute in %s run tp %s %.2f %.2f %.2f %.1f 0",
                 r.dimension(), sel, sp[0], sp[1], sp[2], sp[3]));
         Kits.apply(r, sel, type, false);
+        p.setHealth(p.getMaxHealth()); // après le kit : la vie maximale a pu changer
         r.run("effect give " + sel + " minecraft:resistance 3 4 true"); // protection pendant la préparation
     }
 
@@ -208,6 +213,13 @@ public final class DuelManager {
         return true;
     }
 
+    /** Les perles d'Ender du fou ne lui font aucun dégât (elles infligent des dégâts de chute). */
+    public static boolean allowDamage(LivingEntity entity, DamageSource source) {
+        Duel d = current;
+        if (d == null) return true;
+        return !(d.types.get(entity.getUuid()) == PieceType.BISHOP && source.isOf(DamageTypes.FALL));
+    }
+
     /** Un joueur quitte en plein duel : il perd, et on lui rend son inventaire tout de suite. */
     public static void onDisconnect(ServerPlayerEntity p) {
         Duel d = current;
@@ -239,6 +251,7 @@ public final class DuelManager {
         for (int i = 0; i < s.stacks.length; i++) {
             p.getInventory().setStack(i, s.stacks[i]);
         }
+        r.run("attribute " + p.getUuidAsString() + " minecraft:generic.max_health base set 20");
         p.clearStatusEffects();
         p.extinguish();
         p.setHealth(p.getMaxHealth());
