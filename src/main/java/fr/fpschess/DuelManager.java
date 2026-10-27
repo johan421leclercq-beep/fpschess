@@ -6,6 +6,7 @@ import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.damage.DamageSource;
 import net.minecraft.entity.damage.DamageTypes;
 import net.minecraft.item.ItemStack;
+import net.minecraft.item.Items;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.text.Text;
@@ -27,6 +28,8 @@ public final class DuelManager {
 
     private static final int GRACE_TICKS = 60;          // 3 s de préparation
     private static final int DURATION_TICKS = 20 * 90;  // 90 s de combat max
+    /** Après un lancer, le trident de la tour reste inutilisable ce temps-là (150 ticks = 7,5 s). */
+    private static final int TRIDENT_COOLDOWN_TICKS = 150;
 
     private DuelManager() {}
 
@@ -42,6 +45,8 @@ public final class DuelManager {
         BoardRenderer renderer;
         UUID attacker, defender, dummy; // defender == null -> zombie (dummy)
         Map<UUID, Saved> saved = new HashMap<>();
+        Map<UUID, String> names = new HashMap<>();   // /title n'accepte que les noms de joueurs, pas les UUID
+        Map<UUID, Boolean> hadTrident = new HashMap<>();
         Map<UUID, PieceType> types = new HashMap<>(); // pièce incarnée par chaque joueur
         Map<UUID, double[]> spawns = new HashMap<>(); // point de départ de chaque joueur (pour le ramener sur le plateau)
         int ticks = 0;
@@ -109,6 +114,7 @@ public final class DuelManager {
         s.pitch = p.getPitch();
         s.dimension = p.getWorld().getRegistryKey().getValue().toString();
         d.saved.put(p.getUuid(), s);
+        d.names.put(p.getUuid(), p.getName().getString());
     }
 
     private static void prepare(Duel d, ServerPlayerEntity p, PieceType type, double[] sp) {
@@ -123,7 +129,7 @@ public final class DuelManager {
         d.types.put(p.getUuid(), type);
         r.run(String.format(Locale.ROOT, "execute in %s run tp %s %.2f %.2f %.2f %.1f 0",
                 r.dimension(), sel, sp[0], sp[1], sp[2], sp[3]));
-        Kits.apply(r, sel, type, false);
+        Kits.apply(r, sel, type, p);
         p.setHealth(p.getMaxHealth()); // après le kit : la vie maximale a pu changer
         r.run("effect give " + sel + " minecraft:resistance 3 4 true"); // protection pendant la préparation
     }
@@ -140,7 +146,7 @@ public final class DuelManager {
               + "DeathLootTable:\"minecraft:empty\",Tags:[\"fpschess_dummy\"],"
               + "CustomName:'{\"text\":\"%s adverse\"}'}",
                 r.dimension(), sp[0], sp[1], sp[2], uuidNbt, Kits.pieceName(type)));
-        Kits.apply(r, d.dummy.toString(), type, true);
+        Kits.apply(r, d.dummy.toString(), type, null);
     }
 
     /** Chaque joueur voit son rôle et la pièce qu'il incarne. */
@@ -150,7 +156,7 @@ public final class DuelManager {
             String sub = isAttacker
                     ? "Tu attaques avec : " + Kits.pieceName(atk) + " (contre " + Kits.pieceName(def) + ")"
                     : "Tu défends avec : " + Kits.pieceName(def) + " (contre " + Kits.pieceName(atk) + ")";
-            String sel = id.toString();
+            String sel = "@a[name=" + d.names.get(id) + "]";
             d.renderer.run("title " + sel + " subtitle {\"text\":\"" + sub + "\",\"color\":\"gray\"}");
             d.renderer.run("title " + sel + " title {\"text\":\"DUEL\",\"color\":\"red\",\"bold\":true}");
         }
@@ -171,6 +177,18 @@ public final class DuelManager {
                     d.renderer.run(String.format(Locale.ROOT, "execute in %s run tp %s %.2f %.2f %.2f %.1f 0",
                             d.renderer.dimension(), p.getUuidAsString(), sp[0], sp[1], sp[2], sp[3]));
                 }
+            }
+            // Trident de la tour : dès qu'il est lancé, il reste inutilisable un long moment
+            for (UUID id : d.types.keySet()) {
+                if (d.types.get(id) != PieceType.ROOK) continue;
+                ServerPlayerEntity rook = server.getPlayerManager().getPlayer(id);
+                if (rook == null) continue;
+                boolean has = hasTrident(rook);
+                Boolean hadBefore = d.hadTrident.get(id);
+                if (hadBefore != null && hadBefore && !has) {
+                    rook.getItemCooldownManager().set(Items.TRIDENT, TRIDENT_COOLDOWN_TICKS);
+                }
+                d.hadTrident.put(id, has);
             }
             if (d.ticks == GRACE_TICKS && d.dummy != null) {
                 d.renderer.run("data modify entity " + d.dummy + " NoAI set value 0b");
@@ -213,6 +231,13 @@ public final class DuelManager {
         return true;
     }
 
+    private static boolean hasTrident(ServerPlayerEntity p) {
+        for (int i = 0; i < p.getInventory().size(); i++) {
+            if (p.getInventory().getStack(i).isOf(Items.TRIDENT)) return true;
+        }
+        return false;
+    }
+
     /** Les perles d'Ender du fou ne lui font aucun dégât (elles infligent des dégâts de chute). */
     public static boolean allowDamage(LivingEntity entity, DamageSource source) {
         Duel d = current;
@@ -252,6 +277,7 @@ public final class DuelManager {
             p.getInventory().setStack(i, s.stacks[i]);
         }
         r.run("attribute " + p.getUuidAsString() + " minecraft:generic.max_health base set 20");
+        p.getItemCooldownManager().set(Items.TRIDENT, 0); // la recharge lente ne doit pas déborder du duel
         p.clearStatusEffects();
         p.extinguish();
         p.setHealth(p.getMaxHealth());

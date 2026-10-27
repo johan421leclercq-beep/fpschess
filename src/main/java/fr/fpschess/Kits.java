@@ -1,6 +1,10 @@
 package fr.fpschess;
 
 import com.github.bhlangonijr.chesslib.PieceType;
+import net.minecraft.item.Item;
+import net.minecraft.item.ItemStack;
+import net.minecraft.item.Items;
+import net.minecraft.server.network.ServerPlayerEntity;
 
 import java.util.List;
 
@@ -13,8 +17,11 @@ public final class Kits {
      * Un kit. gives = objets donnés tels quels ("objet quantité"). effects = "effet:niveau:secondes"
      * (niveau 0 = niveau I). extraHealth = points de vie en plus (2 points = 1 cœur).
      */
+    /** Un objet donné directement dans l'inventaire (la commande /give refuse les UUID). */
+    private record Give(Item item, int count) {}
+
     private record Kit(String head, String chest, String legs, String feet,
-                       String weapon, String offhand, List<String> gives, List<String> effects,
+                       String weapon, String offhand, List<Give> gives, List<String> effects,
                        int extraHealth) {}
 
     private static final String LOYALTY_TRIDENT =
@@ -31,12 +38,12 @@ public final class Kits {
             // Fou : 4 perles d'Ender (sans dégâts de chute, voir DuelManager) + casque et plastron en mailles + épée en pierre
             case BISHOP -> new Kit("minecraft:chainmail_helmet", "minecraft:chainmail_chestplate", null, null,
                     "minecraft:stone_sword", null,
-                    List.of("minecraft:ender_pearl 4"), List.of(), 0);
+                    List.of(new Give(Items.ENDER_PEARL, 4)), List.of(), 0);
 
             // Cavalier : saut 2 pendant 1 min + 8 charges de vent + masse + casque et plastron en mailles
             case KNIGHT -> new Kit("minecraft:chainmail_helmet", "minecraft:chainmail_chestplate", null, null,
                     "minecraft:mace", null,
-                    List.of("minecraft:wind_charge 8"), List.of("jump_boost:1:60"), 0);
+                    List.of(new Give(Items.WIND_CHARGE, 8)), List.of("jump_boost:1:60"), 0);
 
             // Tour : trident Loyauté 3 + casque et jambières en fer + plastron en mailles + résistance 1
             case ROOK -> new Kit("minecraft:iron_helmet", "minecraft:chainmail_chestplate",
@@ -48,13 +55,13 @@ public final class Kits {
             case QUEEN -> new Kit("minecraft:iron_helmet", "minecraft:iron_chestplate",
                     "minecraft:iron_leggings", "minecraft:iron_boots",
                     "minecraft:iron_sword", "minecraft:shield",
-                    List.of("minecraft:golden_apple 1"), List.of(), 10);
+                    List.of(new Give(Items.GOLDEN_APPLE, 1)), List.of(), 10);
 
             // Roi : totem + 1 pomme dorée enchantée + mailles complètes + épée en pierre
             case KING -> new Kit("minecraft:chainmail_helmet", "minecraft:chainmail_chestplate",
                     "minecraft:chainmail_leggings", "minecraft:chainmail_boots",
                     "minecraft:stone_sword", "minecraft:totem_of_undying",
-                    List.of("minecraft:enchanted_golden_apple 1"), List.of(), 0);
+                    List.of(new Give(Items.ENCHANTED_GOLDEN_APPLE, 1)), List.of(), 0);
 
             default -> new Kit("minecraft:leather_helmet", "minecraft:leather_chestplate",
                     "minecraft:leather_leggings", "minecraft:leather_boots",
@@ -76,9 +83,9 @@ public final class Kits {
 
     /**
      * Équipe une cible (joueur ou mob) via des commandes vanilla.
-     * sel = UUID de l'entité. Un mob (dummy) reçoit armure + arme, et la vie en plus s'il y a lieu.
+     * sel = UUID de l'entité. player = null pour un mob (le zombie) : il reçoit armure + arme, et la vie en plus s'il y a lieu.
      */
-    public static void apply(BoardRenderer r, String sel, PieceType type, boolean dummy) {
+    public static void apply(BoardRenderer r, String sel, PieceType type, ServerPlayerEntity player) {
         Kit k = kit(type);
         slot(r, sel, "armor.head", k.head());
         slot(r, sel, "armor.chest", k.chest());
@@ -87,7 +94,7 @@ public final class Kits {
         slot(r, sel, "weapon.mainhand", k.weapon());
 
         int maxHealth = 20 + k.extraHealth();
-        if (dummy) {
+        if (player == null) { // le zombie du mode solo
             if (k.extraHealth() > 0) {
                 r.run("attribute " + sel + " minecraft:generic.max_health base set " + maxHealth);
                 r.run("data modify entity " + sel + " Health set value " + maxHealth + "f");
@@ -99,8 +106,8 @@ public final class Kits {
         r.run("attribute " + sel + " minecraft:generic.max_health base set " + maxHealth);
 
         slot(r, sel, "weapon.offhand", k.offhand());
-        for (String give : k.gives()) {
-            r.run("give " + sel + " " + give);
+        for (Give give : k.gives()) {
+            player.getInventory().insertStack(new ItemStack(give.item(), give.count()));
         }
         for (String eff : k.effects()) {
             String[] parts = eff.split(":"); // effet, niveau, durée en secondes
