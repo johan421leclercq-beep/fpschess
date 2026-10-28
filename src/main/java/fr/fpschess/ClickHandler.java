@@ -461,6 +461,10 @@ public class ClickHandler {
         renderer.effect(c.capturedSquare(), true);
         redrawFloor();
         Titles.show(server, "@a", title, subtitle, "gold");
+        if (!attackerWon && !game.isOver() && game.sideToMove() == c.attacker().getPieceSide()) {
+            broadcast(server, "La pièce retirée protégeait son roi : les " + turnName()
+                    + " doivent rejouer pour sortir de l'échec.");
+        }
         showState(server, 100); // échec, mat... : annoncé juste après le résultat du duel
         syncTools(server);
         maybeAiMove(server, 120);

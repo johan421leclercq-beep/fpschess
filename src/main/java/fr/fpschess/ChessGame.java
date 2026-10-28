@@ -118,6 +118,14 @@ public class ChessGame {
         board.unsetPiece(capture.attacker(), capture.from());
         board.setSideToMove(attackerSide.flip());
         fixCastlingRights();
+
+        // Si la pièce retirée protégeait son propre roi (pièce clouée), ce roi est maintenant en échec.
+        // Laisser jouer l'adversaire donnerait une position impossible : c'est donc au camp en échec
+        // de rejouer pour s'en sortir (et s'il ne peut pas, c'est échec et mat).
+        board.setSideToMove(attackerSide);
+        if (!board.isKingAttacked()) {
+            board.setSideToMove(attackerSide.flip());
+        }
     }
 
     /** Un roi a perdu son duel : la partie est terminée. */
