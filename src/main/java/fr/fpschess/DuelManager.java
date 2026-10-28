@@ -44,7 +44,8 @@ public final class DuelManager {
 
     private static class Duel {
         BoardRenderer renderer;
-        UUID attacker, defender, dummy; // defender == null -> zombie (dummy)
+        UUID attacker, defender, dummy; // attacker ou defender null -> c'est le zombie (dummy) qui tient ce rôle
+        boolean dummyIsAttacker = false;
         Map<UUID, Saved> saved = new HashMap<>();
         Map<UUID, String> names = new HashMap<>();   // /title n'accepte que les noms de joueurs, pas les UUID
         Map<UUID, Boolean> hadTrident = new HashMap<>();
@@ -77,26 +78,31 @@ public final class DuelManager {
         r.clearDrops();
         Duel d = new Duel();
         d.renderer = r;
-        d.attacker = attacker.getUuid();
+        d.attacker = attacker == null ? null : attacker.getUuid();
         d.defender = defender == null ? null : defender.getUuid();
-        d.dummy = defender == null ? UUID.randomUUID() : null;
+        d.dummy = (attacker == null || defender == null) ? UUID.randomUUID() : null;
+        d.dummyIsAttacker = attacker == null;
         d.onFinish = onFinish;
 
         PieceType atkType = c.attacker().getPieceType();
         PieceType defType = c.defender().getPieceType();
 
-        save(d, attacker);
-        prepare(d, attacker, atkType, atkSpawn);
+        if (attacker != null) {
+            save(d, attacker);
+            prepare(d, attacker, atkType, atkSpawn);
+        } else {
+            spawnDummy(d, atkType, atkSpawn); // l'IA attaque : un zombie joue l'attaquant
+        }
         if (defender != null) {
             save(d, defender);
             prepare(d, defender, defType, defSpawn);
-        } else {
+        } else if (attacker != null) {
             spawnDummy(d, defType, defSpawn);
         }
         current = d;
 
         FpsChessMod.LOGGER.info("Duel : attaquant {} ({}), défenseur {} ({})",
-                attacker.getName().getString(), Kits.pieceName(atkType),
+                attacker == null ? "zombie" : attacker.getName().getString(), Kits.pieceName(atkType),
                 defender == null ? "zombie" : defender.getName().getString(), Kits.pieceName(defType));
         announce(server, d, atkType, defType);
     }
@@ -220,7 +226,8 @@ public final class DuelManager {
         if (d == null) return true;
         UUID id = entity.getUuid();
         if (id.equals(d.dummy)) {
-            if (d.attackerWon == null) d.attackerWon = true;
+            // le zombie meurt : si c'était le défenseur, l'attaquant gagne ; si c'était l'attaquant, il perd
+            if (d.attackerWon == null) d.attackerWon = !d.dummyIsAttacker;
             return true;
         }
         if (id.equals(d.attacker) || id.equals(d.defender)) {

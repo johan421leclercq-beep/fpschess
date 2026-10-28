@@ -66,7 +66,7 @@ public class FpsChessMod implements ModInitializer {
     private static Text modeMenu() {
         return Text.literal("Plateau prêt ! Comment veux-tu jouer ?  ").formatted(Formatting.GOLD)
             .append(button("[Jouer seul (test)]", "/fpschess mode solo", Formatting.GREEN,
-                "Tu joues les deux camps. Les duels se font contre un zombie équipé."))
+                "Tu joues les Blancs contre une IA qui joue les Noirs. Les duels se font contre un zombie équipé."))
             .append(Text.literal("  "))
             .append(button("[Jouer avec un ami]", "/fpschess mode friend", Formatting.AQUA,
                 "Tu joues les Blancs, ton ami rejoint les Noirs."));
@@ -190,8 +190,9 @@ public class FpsChessMod implements ModInitializer {
                         handler.removeTools(ctx.getSource().getServer());
                         handler.setSolo(ctx.getSource().getPlayerOrThrow());
                         handler.syncTools(ctx.getSource().getServer());
+                        handler.maybeAiMove(ctx.getSource().getServer(), 20);
                         ctx.getSource().sendFeedback(() -> Text.literal(
-                            "Mode solo : tu joues les deux camps. Les duels se font contre un zombie."
+                            "Mode solo : tu joues les Blancs contre l'IA (les Noirs). Les duels se font contre un zombie."
                             + " (La difficulté ne doit pas être en pacifique : /difficulty normal)")
                             .formatted(Formatting.GREEN), false);
                         return 1;
@@ -232,6 +233,30 @@ public class FpsChessMod implements ModInitializer {
                             .formatted(Formatting.GREEN), false);
                     return 1;
                 }))
+
+                // /fpschess ai on|off : l'IA joue les Noirs en mode solo
+                .then(CommandManager.literal("ai").requires(FpsChessMod::isOp)
+                    .then(CommandManager.literal("on").executes(ctx -> {
+                        if (handler == null) {
+                            ctx.getSource().sendError(Text.literal("Crée d'abord le plateau avec /fpschess board."));
+                            return 0;
+                        }
+                        handler.setAi(true);
+                        handler.syncTools(ctx.getSource().getServer());
+                        handler.maybeAiMove(ctx.getSource().getServer(), 20);
+                        ctx.getSource().sendFeedback(() -> Text.literal("IA activée : elle joue les Noirs en mode solo."), false);
+                        return 1;
+                    }))
+                    .then(CommandManager.literal("off").executes(ctx -> {
+                        if (handler == null) {
+                            ctx.getSource().sendError(Text.literal("Crée d'abord le plateau avec /fpschess board."));
+                            return 0;
+                        }
+                        handler.setAi(false);
+                        handler.syncTools(ctx.getSource().getServer());
+                        ctx.getSource().sendFeedback(() -> Text.literal("IA désactivée : en mode solo, tu joues les deux camps."), false);
+                        return 1;
+                    })))
 
                 // /fpschess promote q|r|b|n : choix de la promotion (ouvert à tous)
                 .then(CommandManager.literal("promote")

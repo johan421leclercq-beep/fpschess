@@ -18,6 +18,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * Gère les clics sur le plateau : 1er clic = choisir une pièce, 2e clic = destination.
@@ -43,6 +45,16 @@ public class ClickHandler {
     private Square pendingFrom = null; // promotion en attente de choix
     private Square pendingTo = null;
 
+    // IA : en mode solo, elle joue les Noirs. La recherche tourne dans un fil à part pour ne pas figer le serveur.
+    private static final ExecutorService AI_POOL = Executors.newSingleThreadExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "fpschess-ai");
+        thread.setDaemon(true);
+        return thread;
+    });
+    private boolean ai = true;
+    private boolean aiThinking = false;
+    private int aiGeneration = 0; // change à chaque nouvelle partie : une réponse tardive de l'IA est alors ignorée
+
     private Mode mode = Mode.NONE; // il faut choisir solo ou ami avant de jouer
     private UUID owner = null;     // en mode solo : le seul joueur autorisé
     private String ownerName = "";
@@ -52,6 +64,68 @@ public class ClickHandler {
     public ClickHandler(ChessGame game, BoardRenderer renderer) {
         this.game = game;
         this.renderer = renderer;
+    }
+
+    // ---------- IA ----------
+
+    public boolean aiEnabled() {
+        return ai;
+    }
+
+    public void setAi(boolean on) {
+        ai = on;
+        aiGeneration++;
+        aiThinking = false;
+    }
+
+    private boolean aiShouldPlay() {
+        return mode == Mode.SOLO && ai && !game.isOver()
+                && game.sideToMove() == Side.BLACK && !DuelManager.isActive();
+    }
+
+    /** Fait jouer l'IA si c'est son tour. delay = attente en ticks avant qu'elle ne commence (20 ticks = 1 s). */
+    public void maybeAiMove(MinecraftServer server, int delay) {
+        if (!aiShouldPlay() || aiThinking) return;
+        aiThinking = true;
+        final int generation = aiGeneration;
+        Titles.later(Math.max(delay, 1), () -> startAiSearch(server, generation));
+    }
+
+    private void startAiSearch(MinecraftServer server, int generation) {
+        if (generation != aiGeneration || !aiShouldPlay()) {
+            aiThinking = false;
+            return;
+        }
+        final String fen = game.board().getFen();
+        AI_POOL.execute(() -> {
+            Move best = null;
+            try {
+                best = new ChessAI().chooseMove(fen); // calcul sur une copie du plateau, hors du fil du serveur
+            } catch (Exception e) {
+                FpsChessMod.LOGGER.error("Erreur de l'IA", e);
+            }
+            final Move chosen = best;
+            server.execute(() -> finishAiMove(server, generation, fen, chosen));
+        });
+    }
+
+    private void finishAiMove(MinecraftServer server, int generation, String fen, Move chosen) {
+        aiThinking = false;
+        // Si la partie a changé pendant que l'IA réfléchissait, on ignore sa réponse
+        if (generation != aiGeneration || !aiShouldPlay() || !game.board().getFen().equals(fen)) return;
+        if (chosen == null) return;
+        execute(server, null, chosen.getFrom(), chosen.getTo(), promotionChar(chosen));
+    }
+
+    private static char promotionChar(Move m) {
+        Piece promo = m.getPromotion();
+        if (promo == null || promo == Piece.NONE) return 'q';
+        return switch (promo.getPieceType()) {
+            case ROOK -> 'r';
+            case BISHOP -> 'b';
+            case KNIGHT -> 'n';
+            default -> 'q';
+        };
     }
 
     // ---------- Charge de sélection ----------
@@ -89,7 +163,7 @@ public class ClickHandler {
     public void syncTools(MinecraftServer server) {
         UUID holder = null;
         if (!game.isOver() && !DuelManager.isActive()) {
-            if (mode == Mode.SOLO) holder = owner;
+            if (mode == Mode.SOLO) holder = (ai && game.sideToMove() == Side.BLACK) ? null : owner;
             else if (mode == Mode.FRIEND) holder = game.sideToMove() == Side.WHITE ? white : black;
         }
         applyTools(server, holder);
@@ -122,6 +196,8 @@ public class ClickHandler {
     public Mode mode() { return mode; }
 
     public void setSolo(ServerPlayerEntity player) {
+        aiGeneration++;
+        aiThinking = false;
         mode = Mode.SOLO;
         owner = player.getUuid();
         ownerName = player.getName().getString();
@@ -131,6 +207,8 @@ public class ClickHandler {
     }
 
     public void setFriend(ServerPlayerEntity whitePlayer) {
+        aiGeneration++;
+        aiThinking = false;
         mode = Mode.FRIEND;
         white = whitePlayer.getUuid();
         black = null;
@@ -157,6 +235,8 @@ public class ClickHandler {
 
     /** Nouvelle partie : on oublie aussi le dernier coup. */
     public void newGame() {
+        aiGeneration++;
+        aiThinking = false;
         lastFrom = null;
         lastTo = null;
         reset();
@@ -217,6 +297,9 @@ public class ClickHandler {
         if (mode == Mode.SOLO && !player.getUuid().equals(owner)) {
             return "Mode solo : seul " + ownerName + " peut jouer. Passez en mode ami pour jouer à deux.";
         }
+        if (mode == Mode.SOLO && ai && game.sideToMove() == Side.BLACK) {
+            return "C'est au tour de l'IA.";
+        }
         if (mode == Mode.FRIEND) {
             if (black == null) {
                 return "En attente du joueur Noir (il doit cliquer sur Rejoindre ou taper /fpschess join).";
@@ -240,7 +323,8 @@ public class ClickHandler {
         Square to = pendingTo;
         pendingFrom = null;
         pendingTo = null;
-        execute(player, from, to, piece);
+        MinecraftServer promoServer = player.getServer();
+        if (promoServer != null) execute(promoServer, player, from, to, piece);
         return null;
     }
 
@@ -299,19 +383,19 @@ public class ClickHandler {
             player.sendMessage(promotionMenu(), false);
             return;
         }
-        execute(player, selected, sq, 'q');
+        MinecraftServer server = player.getServer();
+        if (server == null) return;
+        execute(server, player, selected, sq, 'q');
     }
 
     /** Joue le coup from -> to : coup normal, ou duel en cas de prise. */
-    private void execute(ServerPlayerEntity player, Square from, Square to, char promo) {
+    private void execute(MinecraftServer server, ServerPlayerEntity player, Square from, Square to, char promo) {
+        // player == null : c'est l'IA qui joue
         MoveResult r = game.tryMove(from, to, promo);
         if (!r.legal()) {
-            tell(player, r.message());
+            if (player != null) tell(player, r.message());
             return;
         }
-
-        MinecraftServer server = player.getServer();
-        if (server == null) return;
 
         // Pas de prise : coup normal
         if (r.capture() == null) {
@@ -325,6 +409,7 @@ public class ClickHandler {
             broadcast(server, r.move() + (game.isOver() ? "" : ". Trait aux " + turnName() + "."));
             showState(server, 0);
             syncTools(server);
+            maybeAiMove(server, 30);
             return;
         }
 
@@ -336,9 +421,13 @@ public class ClickHandler {
             UUID other = game.sideToMove() == Side.WHITE ? black : white;
             defender = server.getPlayerManager().getPlayer(other);
             if (defender == null) {
-                tell(player, "L'autre joueur est déconnecté.");
+                if (player != null) tell(player, "L'autre joueur est déconnecté.");
                 return;
             }
+        } else if (player == null) {
+            // L'IA attaque : le joueur défend, et un zombie joue l'attaquant
+            defender = server.getPlayerManager().getPlayer(owner);
+            if (defender == null) return;
         }
         selected = null;
         redrawFloor();
@@ -374,6 +463,7 @@ public class ClickHandler {
         Titles.show(server, "@a", title, subtitle, "gold");
         showState(server, 100); // échec, mat... : annoncé juste après le résultat du duel
         syncTools(server);
+        maybeAiMove(server, 120);
     }
 
     /** Annonce en titre : échec, mat, pat, nulle, abandon ou roi tombé. delay = attente en ticks. */
