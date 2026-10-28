@@ -28,9 +28,9 @@ import java.util.Random;
 public final class ChessAI {
 
     // ---------- Réglages ----------
-    public static final int DEPTH = 2;
+    public static final int DEPTH = 3;
     private static final long TIME_LIMIT_MS = 3000;   // sécurité : la recherche s'arrête après ce temps
-    private static final double MISTAKE_CHANCE = 0.08; // 8 % des coups sont une petite imprécision
+    private static final double MISTAKE_CHANCE = 0.05; // 5 % des coups sont une petite imprécision
     private static final int GOOD_MARGIN = 20;         // écart accepté (en centièmes de pion) pour varier les coups
     private static final int MISTAKE_MARGIN = 150;     // écart accepté lors d'une imprécision (1,5 pion)
     private static final int QUIESCE_DEPTH = 3;        // plies d'échanges suivis au bout de la recherche
